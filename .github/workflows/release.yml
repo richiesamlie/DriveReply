@@ -29,13 +29,14 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      - name: Build Debug and Release APKs
+        run: ./gradlew assembleDebug assembleRelease
 
-      - name: Find and Rename APK
+      - name: Prepare Build Artifacts
         run: |
           mkdir -p build-artifacts
           cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/DriveReply-v1.0.${{ github.run_number }}-debug.apk
+          cp app/build/outputs/apk/release/app-release-unsigned.apk build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -50,8 +51,12 @@ jobs:
             ### Commit Message
             > ${{ github.event.head_commit.message }}
             
-            ### Assets
-            The compiled Android Debug APK is attached below and ready to be installed on physical devices for immediate testing and verification.
-          files: build-artifacts/DriveReply-v1.0.${{ github.run_number }}-debug.apk
+            ### Available Builds
+            1. **Release Build (Unsigned)** (`DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk`): Full R8 minification and resource shrinking applied. Maximum performance and minimal size (~3MB). *Requires signing before installation on some devices.*
+            2. **Debug Build** (`DriveReply-v1.0.${{ github.run_number }}-debug.apk`): Signed with standard debug keystore. Instantly installable for test and verification. Contains debug headers (~15MB).
+          files: |
+            build-artifacts/DriveReply-v1.0.${{ github.run_number }}-debug.apk
+            build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
