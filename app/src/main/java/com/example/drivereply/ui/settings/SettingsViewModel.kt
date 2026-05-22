@@ -1,6 +1,7 @@
 package com.example.drivereply.ui.settings
 
 import android.app.Application
+import android.bluetooth.BluetoothManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
@@ -28,6 +29,20 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             initialValue = 7
         )
 
+    val bluetoothDevices: StateFlow<Set<String>> = preferencesManager.bluetoothDevices
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptySet()
+        )
+
+    val speedActivationThreshold: StateFlow<Int> = preferencesManager.speedActivationThreshold
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = 0
+        )
+
     fun setReplyInGroupChats(enabled: Boolean) {
         viewModelScope.launch {
             preferencesManager.setReplyInGroupChats(enabled)
@@ -37,6 +52,40 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setLogRetentionDays(days: Int) {
         viewModelScope.launch {
             preferencesManager.setLogRetentionDays(days)
+        }
+    }
+
+    fun setBluetoothDevices(devices: Set<String>) {
+        viewModelScope.launch {
+            preferencesManager.setBluetoothDevices(devices)
+        }
+    }
+
+    fun toggleBluetoothDevice(address: String) {
+        viewModelScope.launch {
+            val current = bluetoothDevices.value.toMutableSet()
+            if (current.contains(address)) {
+                current.remove(address)
+            } else {
+                current.add(address)
+            }
+            preferencesManager.setBluetoothDevices(current)
+        }
+    }
+
+    fun setSpeedActivationThreshold(threshold: Int) {
+        viewModelScope.launch {
+            preferencesManager.setSpeedActivationThreshold(threshold)
+        }
+    }
+
+    fun getPairedBluetoothDevices(): List<Pair<String, String>> {
+        val bluetoothManager = app.getSystemService(Application.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = bluetoothManager?.adapter ?: return emptyList()
+        return try {
+            adapter.bondedDevices.map { (it.name ?: "Unknown Device") to it.address }
+        } catch (_: SecurityException) {
+            emptyList()
         }
     }
 }

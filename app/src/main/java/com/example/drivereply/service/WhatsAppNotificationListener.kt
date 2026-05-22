@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.example.drivereply.DriveReplyApplication
+import com.example.drivereply.data.MessageTemplate
 import com.example.drivereply.data.PreferencesManager
 import com.example.drivereply.data.ReplyLogEntry
 import kotlinx.coroutines.CoroutineScope
@@ -17,9 +18,12 @@ import kotlinx.coroutines.launch
 class WhatsAppNotificationListener : NotificationListenerService() {
 
     companion object {
-        private val WHATSAPP_PACKAGES = setOf(
+        private val SUPPORTED_PACKAGES = setOf(
             "com.whatsapp",
-            "com.whatsapp.w4b"
+            "com.whatsapp.w4b",
+            "org.telegram.messenger",
+            "org.thoughtlight.securesms",
+            "com.facebook.orca"
         )
     }
 
@@ -32,7 +36,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName !in WHATSAPP_PACKAGES) return
+        if (sbn.packageName !in SUPPORTED_PACKAGES) return
 
         // Skip group summary notifications
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
@@ -52,9 +56,52 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             // Check if already replied to this contact in this driving session
             if (contactName in DriveReplyService.repliedContacts) return@launch
 
-            // Get the active template
             val app = application as DriveReplyApplication
-            val template = app.database.messageTemplateDao().getActiveSuspend() ?: return@launch
+            var template: MessageTemplate? = null
+
+            // 1. Resolve template using custom rules
+            val rules = app.database.templateRuleDao().getRulesForContact(contactName)
+            if (rules.isNotEmpty()) {
+                val now = java.time.LocalDateTime.now()
+                val currentDayOfWeek = now.dayOfWeek.value // 1 = Monday, 7 = Sunday
+                val localTime = now.toLocalTime()
+                val currentMsSinceMidnight = (localTime.toSecondOfDay() * 1000L) + (localTime.nano / 1000000L)
+
+                // Filter rules that match time/day constraints
+                val matchingRules = rules.filter { rule ->
+                    // Check days of week
+                    val daysMatch = if (!rule.daysOfWeek.isNullOrEmpty()) {
+                        val daysList = rule.daysOfWeek.split(",").mapNotNull { it.trim().toIntOrNull() }
+                        currentDayOfWeek in daysList
+                    } else {
+                        true
+                    }
+
+                    // Check time window
+                    val timeMatch = if (rule.startTime != null && rule.endTime != null) {
+                        currentMsSinceMidnight in rule.startTime..rule.endTime
+                    } else {
+                        true
+                    }
+
+                    daysMatch && timeMatch
+                }
+
+                // Prioritize specific contact rule over general rule (null contactName)
+                val bestRule = matchingRules.firstOrNull { it.contactName != null }
+                    ?: matchingRules.firstOrNull { it.contactName == null }
+
+                if (bestRule != null) {
+                    template = app.database.messageTemplateDao().getById(bestRule.templateId)
+                }
+            }
+
+            // Fallback to active global template if no rule matched
+            if (template == null) {
+                template = app.database.messageTemplateDao().getActiveSuspend()
+            }
+
+            if (template == null) return@launch
 
             // Find the reply action with RemoteInput
             val replyAction = findReplyAction(sbn) ?: return@launch
@@ -81,7 +128,8 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                     ReplyLogEntry(
                         contactName = contactName,
                         templateName = template.name,
-                        messageSent = template.body
+                        messageSent = template.body,
+                        packageName = sbn.packageName
                     )
                 )
             } catch (_: Exception) {

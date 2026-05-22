@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -14,6 +15,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import com.example.drivereply.ui.analytics.AnalyticsScreen
 import com.example.drivereply.ui.log.ReplyLogScreen
 import com.example.drivereply.ui.main.MainScreen
 import com.example.drivereply.ui.settings.SettingsScreen
@@ -21,7 +23,7 @@ import com.example.drivereply.ui.templates.EditTemplateScreen
 import com.example.drivereply.ui.templates.TemplatesScreen
 
 enum class Tab {
-    Home, Templates, Log
+    Home, Templates, Log, Analytics
 }
 
 @Composable
@@ -83,6 +85,12 @@ fun MainShell(
                     icon = { Icon(imageVector = Icons.Default.History, contentDescription = "Logs") },
                     label = { Text("Log") }
                 )
+                NavigationBarItem(
+                    selected = currentTab == Tab.Analytics,
+                    onClick = { currentTab = Tab.Analytics },
+                    icon = { Icon(imageVector = Icons.Default.BarChart, contentDescription = "Analytics") },
+                    label = { Text("Analytics") }
+                )
             }
         },
         modifier = modifier
@@ -103,6 +111,11 @@ fun MainShell(
                 }
                 Tab.Log -> {
                     ReplyLogScreen(
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                Tab.Analytics -> {
+                    AnalyticsScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }

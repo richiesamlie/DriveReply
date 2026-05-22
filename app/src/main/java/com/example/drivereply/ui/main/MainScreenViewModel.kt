@@ -25,6 +25,9 @@ data class MainUiState(
     val hasNotificationListener: Boolean = false,
     val hasNotificationPermission: Boolean = false,
     val isBatteryOptimized: Boolean = false,
+    val hasBluetoothConnect: Boolean = false,
+    val hasFineLocation: Boolean = false,
+    val hasBackgroundLocation: Boolean = false,
 )
 
 class MainScreenViewModel(application: Application) : AndroidViewModel(application) {
@@ -42,7 +45,8 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         DriveReplyService.isDriving,
         messageTemplateDao.getActive(),
         replyLogDao.getAll(),
-    ) { enabled, driving, activeTemplate, logs ->
+        _permissionState
+    ) { enabled, driving, activeTemplate, logs, permissions ->
         val todayStart = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -55,10 +59,13 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             isDriving = driving,
             activeTemplate = activeTemplate,
             repliesToday = logs.count { it.timestamp >= todayStart },
-            hasActivityRecognition = _permissionState.value.activityRecognition,
-            hasNotificationListener = _permissionState.value.notificationListener,
-            hasNotificationPermission = _permissionState.value.notification,
-            isBatteryOptimized = _permissionState.value.batteryOptimized,
+            hasActivityRecognition = permissions.activityRecognition,
+            hasNotificationListener = permissions.notificationListener,
+            hasNotificationPermission = permissions.notification,
+            isBatteryOptimized = permissions.batteryOptimized,
+            hasBluetoothConnect = permissions.bluetoothConnect,
+            hasFineLocation = permissions.fineLocation,
+            hasBackgroundLocation = permissions.backgroundLocation,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
@@ -69,6 +76,9 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             notificationListener = PermissionHelper.hasNotificationListenerPermission(context),
             notification = PermissionHelper.hasNotificationPermission(context),
             batteryOptimized = PermissionHelper.isBatteryOptimizationExempt(context),
+            bluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(context),
+            fineLocation = PermissionHelper.hasFineLocationPermission(context),
+            backgroundLocation = PermissionHelper.hasBackgroundLocationPermission(context),
         )
     }
 
@@ -101,4 +111,7 @@ data class PermissionSnapshot(
     val notificationListener: Boolean = false,
     val notification: Boolean = false,
     val batteryOptimized: Boolean = false,
+    val bluetoothConnect: Boolean = false,
+    val fineLocation: Boolean = false,
+    val backgroundLocation: Boolean = false,
 )

@@ -10,5 +10,6 @@ data class ReplyLogEntry(
     val contactName: String,
     val templateName: String,
     val messageSent: String,
+    val packageName: String = "com.whatsapp",
     val timestamp: Long = System.currentTimeMillis()
 )

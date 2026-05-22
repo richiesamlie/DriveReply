@@ -7,17 +7,30 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
+import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.MainActivity
 import com.example.drivereply.receiver.ActivityTransitionReceiver
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionRequest
 import com.google.android.gms.location.DetectedActivity
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 
 class DriveReplyService : Service() {
 
@@ -53,12 +66,31 @@ class DriveReplyService : Service() {
     }
 
     private var transitionPendingIntent: PendingIntent? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    
+    private var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient? = null
+    private var locationCallback: LocationCallback? = null
+    private val speedHandler = Handler(Looper.getMainLooper())
+    private var speedExitRunnable: Runnable? = null
+    private var currentThreshold = 0
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Service active — waiting for driving detection"))
         registerActivityTransitions()
+        
+        // Listen to speed activation threshold settings from DataStore
+        val app = application as DriveReplyApplication
+        app.preferencesManager.speedActivationThreshold
+            .onEach { threshold ->
+                if (threshold > 0) {
+                    startLocationSpeedTracking(threshold)
+                } else {
+                    stopLocationSpeedTracking()
+                }
+            }
+            .launchIn(serviceScope)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -75,6 +107,8 @@ class DriveReplyService : Service() {
 
     override fun onDestroy() {
         unregisterActivityTransitions()
+        stopLocationSpeedTracking()
+        serviceScope.cancel()
         _isDriving.value = false
         super.onDestroy()
     }
@@ -153,5 +187,61 @@ class DriveReplyService : Service() {
                 // Permission may have been revoked
             }
         }
+    }
+
+    private fun startLocationSpeedTracking(threshold: Int) {
+        currentThreshold = threshold
+        if (fusedLocationClient == null) {
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        }
+        
+        stopLocationSpeedTracking()
+        
+        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000L) // 10 seconds
+            .setMinUpdateIntervalMillis(5000L)
+            .build()
+            
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                val location = locationResult.lastLocation ?: return
+                if (location.hasSpeed()) {
+                    val speedKmH = location.speed * 3.6
+                    if (speedKmH >= currentThreshold) {
+                        speedExitRunnable?.let { speedHandler.removeCallbacks(it) }
+                        speedExitRunnable = null
+                        
+                        if (!_isDriving.value) {
+                            setDrivingState(true)
+                            clearRepliedContacts()
+                        }
+                        updateNotification(String.format("Driving detected via Speed: %.1f km/h 🚗", speedKmH))
+                    } else {
+                        if (_isDriving.value && speedExitRunnable == null) {
+                            speedExitRunnable = Runnable {
+                                setDrivingState(false)
+                                updateNotification("Service active — waiting for driving detection")
+                                speedExitRunnable = null
+                            }
+                            speedHandler.postDelayed(speedExitRunnable!!, 2 * 60 * 1000L) // 2 minutes debounce
+                        }
+                    }
+                }
+            }
+        }
+        
+        try {
+            fusedLocationClient?.requestLocationUpdates(locationRequest, locationCallback!!, Looper.getMainLooper())
+        } catch (_: SecurityException) {
+            // Location permission not granted
+        }
+    }
+
+    private fun stopLocationSpeedTracking() {
+        locationCallback?.let { callback ->
+            fusedLocationClient?.removeLocationUpdates(callback)
+        }
+        locationCallback = null
+        speedExitRunnable?.let { speedHandler.removeCallbacks(it) }
+        speedExitRunnable = null
     }
 }

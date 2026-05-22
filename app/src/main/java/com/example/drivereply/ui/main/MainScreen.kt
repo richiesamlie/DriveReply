@@ -69,6 +69,27 @@ fun MainScreen(
         }
     )
 
+    val fineLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { results ->
+            viewModel.refreshPermissions()
+        }
+    )
+
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            viewModel.refreshPermissions()
+        }
+    )
+
+    val bluetoothConnectLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            viewModel.refreshPermissions()
+        }
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -214,6 +235,44 @@ fun MainScreen(
                 isGranted = uiState.isBatteryOptimized,
                 onGrantClick = { viewModel.openBatteryOptimizationSettings() }
             )
+
+            PermissionItem(
+                title = "Fine Location",
+                description = "Enables calculated speed detection for automated start triggers",
+                isGranted = uiState.hasFineLocation,
+                onGrantClick = {
+                    fineLocationLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            )
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                PermissionItem(
+                    title = "Background Location",
+                    description = "Allows speed triggers when screen is off (Choose 'Allow all the time')",
+                    isGranted = uiState.hasBackgroundLocation,
+                    onGrantClick = {
+                        if (uiState.hasFineLocation) {
+                            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        }
+                    }
+                )
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PermissionItem(
+                    title = "Bluetooth Connection",
+                    description = "Required to query paired devices and detect car Bluetooth triggers",
+                    isGranted = uiState.hasBluetoothConnect,
+                    onGrantClick = {
+                        bluetoothConnectLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                    }
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
         }

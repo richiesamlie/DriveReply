@@ -6,5 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable data object Main : NavKey
 @Serializable data object Templates : NavKey
 @Serializable data object ReplyLog : NavKey
+@Serializable data object Analytics : NavKey
 @Serializable data object Settings : NavKey
 @Serializable data class EditTemplate(val templateId: String? = null) : NavKey

@@ -11,14 +11,15 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 @Database(
-    entities = [MessageTemplate::class, ReplyLogEntry::class],
-    version = 1,
+    entities = [MessageTemplate::class, ReplyLogEntry::class, TemplateRule::class],
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun messageTemplateDao(): MessageTemplateDao
     abstract fun replyLogDao(): ReplyLogDao
+    abstract fun templateRuleDao(): TemplateRuleDao
 
     companion object {
         @Volatile
@@ -37,6 +38,7 @@ abstract class AppDatabase : RoomDatabase() {
                 "drivereply.db"
             )
                 .addCallback(PrepopulateCallback())
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
         }
     }

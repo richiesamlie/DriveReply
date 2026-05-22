@@ -7,12 +7,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,9 +42,26 @@ fun SettingsScreen(
     val context = LocalContext.current
     val replyInGroups by viewModel.replyInGroupChats.collectAsStateWithLifecycle()
     val retentionDays by viewModel.logRetentionDays.collectAsStateWithLifecycle()
+    val activeBluetoothDevices by viewModel.bluetoothDevices.collectAsStateWithLifecycle()
+    val speedThreshold by viewModel.speedActivationThreshold.collectAsStateWithLifecycle()
 
     var isBatteryExempt by remember {
         mutableStateOf(PermissionHelper.isBatteryOptimizationExempt(context))
+    }
+
+    var hasBluetoothPermission by remember {
+        mutableStateOf(PermissionHelper.hasBluetoothConnectPermission(context))
+    }
+
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            hasBluetoothPermission = isGranted
+        }
+    )
+
+    LaunchedEffect(Unit) {
+        hasBluetoothPermission = PermissionHelper.hasBluetoothConnectPermission(context)
     }
 
     Scaffold(
@@ -123,6 +146,172 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.weight(1f)
                             )
+                        }
+                    }
+                }
+            }
+
+            // Section: Automation Triggers
+            SettingsSectionHeader(title = "Automation Triggers")
+
+            // Speed-Based Auto-Start Card
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsCar,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Speed-Based Auto-Start",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Automatically activate driving mode when your speed exceeds the selected threshold (requires GPS location permission).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val options = listOf(
+                            0 to "Disabled",
+                            15 to "15 km/h",
+                            30 to "30 km/h",
+                            50 to "50 km/h"
+                        )
+                        options.forEach { (kmh, label) ->
+                            val isSelected = speedThreshold == kmh
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.setSpeedActivationThreshold(kmh) },
+                                label = { Text(label, fontSize = 12.sp) },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Car Bluetooth Triggers Card
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Bluetooth,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Car Bluetooth Triggers",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Select paired Bluetooth devices (like your car's media system) that should automatically toggle the driving mode when connected.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (!hasBluetoothPermission) {
+                        // Request permission button
+                        Button(
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Grant Bluetooth Permission", fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        val pairedDevices = remember(hasBluetoothPermission) {
+                            viewModel.getPairedBluetoothDevices()
+                        }
+                        
+                        if (pairedDevices.isEmpty()) {
+                            Text(
+                                text = "No paired Bluetooth devices found on your system.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                pairedDevices.forEach { (name, address) ->
+                                    val isChecked = activeBluetoothDevices.contains(address)
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { viewModel.toggleBluetoothDevice(address) }
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = name,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = address,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Checkbox(
+                                            checked = isChecked,
+                                            onCheckedChange = { viewModel.toggleBluetoothDevice(address) }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
