@@ -1,0 +1,52 @@
+package com.example.drivereply.data
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "drivereply_prefs")
+
+class PreferencesManager(private val context: Context) {
+
+    companion object {
+        private val KEY_SERVICE_ENABLED = booleanPreferencesKey("is_service_enabled")
+        private val KEY_REPLY_IN_GROUP_CHATS = booleanPreferencesKey("reply_in_group_chats")
+        private val KEY_LOG_RETENTION_DAYS = intPreferencesKey("log_retention_days")
+    }
+
+    val isServiceEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_SERVICE_ENABLED] ?: false
+    }
+
+    val replyInGroupChats: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_REPLY_IN_GROUP_CHATS] ?: false
+    }
+
+    val logRetentionDays: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_LOG_RETENTION_DAYS] ?: 7
+    }
+
+    suspend fun setServiceEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_SERVICE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setReplyInGroupChats(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_REPLY_IN_GROUP_CHATS] = enabled
+        }
+    }
+
+    suspend fun setLogRetentionDays(days: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LOG_RETENTION_DAYS] = days
+        }
+    }
+}

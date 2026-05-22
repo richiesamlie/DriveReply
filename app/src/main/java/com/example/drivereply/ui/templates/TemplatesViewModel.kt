@@ -1,0 +1,36 @@
+package com.example.drivereply.ui.templates
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.drivereply.DriveReplyApplication
+import com.example.drivereply.data.MessageTemplate
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+class TemplatesViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val app = application as DriveReplyApplication
+    private val templateDao = app.database.messageTemplateDao()
+
+    val templates: StateFlow<List<MessageTemplate>> = templateDao.getAll()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+    fun setActiveTemplate(id: String) {
+        viewModelScope.launch {
+            templateDao.setActive(id)
+        }
+    }
+
+    fun deleteTemplate(template: MessageTemplate) {
+        viewModelScope.launch {
+            templateDao.delete(template)
+        }
+    }
+}
