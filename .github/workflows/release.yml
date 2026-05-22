@@ -30,9 +30,11 @@ jobs:
         run: chmod +x gradlew
 
       - name: Decode Keystore (Optional)
-        if: ${{ secrets.SIGNING_KEYSTORE != '' }}
+        env:
+          SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
+        if: ${{ env.SIGNING_KEYSTORE != '' }}
         run: |
-          echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 --decode > release-key.jks
+          echo "$SIGNING_KEYSTORE" | base64 --decode > release-key.jks
 
       - name: Build Debug and Release APKs
         run: ./gradlew assembleDebug assembleRelease
