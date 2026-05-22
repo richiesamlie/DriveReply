@@ -73,6 +73,20 @@ To function reliably in the background, DriveReply requires four core permission
 
 ---
 
+---
+
+## Future Roadmap 🚀
+
+We are actively planning several powerful enhancements for upcoming versions:
+
+- 🛰️ **Smart Triggers (Geofencing & Speed)**: Integrate GPS speed-tracking (auto-trigger when > 20 km/h) and car Bluetooth pairing to complement physical sensor activity recognition.
+- 🎯 **Deep Customization**: Create contact-specific reply rules (e.g., warmer templates for family, professional ones for clients) and time-based active windows.
+- 💬 **Messaging App Expansion**: Expand the notification parser to auto-reply to other messaging networks like Telegram, Signal, and Facebook Messenger.
+- 📊 **Analytics & Dashboards**: A premium visual dashboard illustrating driving stats, auto-replies sent, and driver safety indicators over time.
+- 🧠 **Context-Aware AI Auto-Replies (Pending)**: Incorporate lightweight, privacy-focused on-device models to draft custom contextual replies to complex messages.
+
+---
+
 ## Extensive Documentation
 
 For developer-focused architectural deep dives, database schemas, service binding lifecycles, and troubleshooting guides, please check:
