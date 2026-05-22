@@ -29,14 +29,28 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
+      - name: Decode Keystore (Optional)
+        if: ${{ secrets.SIGNING_KEYSTORE != '' }}
+        run: |
+          echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 --decode > release-key.jks
+
       - name: Build Debug and Release APKs
         run: ./gradlew assembleDebug assembleRelease
+        env:
+          RELEASE_KEYSTORE_PATH: ../release-key.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Prepare Build Artifacts
         run: |
           mkdir -p build-artifacts
           cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/DriveReply-v1.0.${{ github.run_number }}-debug.apk
-          cp app/build/outputs/apk/release/app-release-unsigned.apk build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release.apk
+          else
+            cp app/build/outputs/apk/release/app-release-unsigned.apk build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -52,11 +66,12 @@ jobs:
             > ${{ github.event.head_commit.message }}
             
             ### Available Builds
-            1. **Release Build (Unsigned)** (`DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk`): Full R8 minification and resource shrinking applied. Maximum performance and minimal size (~3MB). *Requires signing before installation on some devices.*
-            2. **Debug Build** (`DriveReply-v1.0.${{ github.run_number }}-debug.apk`): Signed with standard debug keystore. Instantly installable for test and verification. Contains debug headers (~15MB).
+            * **Release Build**: Full R8 minification and resource shrinking applied. Maximum performance and minimal size (~3MB).
+              * *Note: If a signed keystore was provided in GitHub Secrets, the release APK (`DriveReply-v1.0.${{ github.run_number }}-release.apk`) is fully signed and ready for production install. Otherwise, the unsigned APK (`DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk`) is attached.*
+            * **Debug Build** (`DriveReply-v1.0.${{ github.run_number }}-debug.apk`): Signed with standard debug keystore. Instantly installable for local testing and verification (~15MB).
           files: |
             build-artifacts/DriveReply-v1.0.${{ github.run_number }}-debug.apk
-            build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release-unsigned.apk
+            build-artifacts/DriveReply-v1.0.${{ github.run_number }}-release*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
