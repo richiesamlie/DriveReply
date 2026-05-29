@@ -116,6 +116,9 @@ To function reliably in the background, DriveReply utilizes:
 For developer-focused architectural deep dives, database schemas, service binding lifecycles, and troubleshooting guides, please check:
 👉 **[Developer & Architecture Documentation](docs/ARCHITECTURE.md)**
 
+For execution tracking and completed roadmap milestones, see:
+👉 **[Progress Log](docs/PROGRESS.md)**
+
 ## License
 
 This project is licensed under the Apache License 2.0.

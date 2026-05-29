@@ -12,10 +12,15 @@ This roadmap prioritizes reliability first, then UX clarity, then scale features
 
 ## Current Baseline (Observed)
 
-- Notification listener can be granted but temporarily disconnected after app/service start.
-- Rebind recovery now exists and logs confirm listener can reconnect.
-- WhatsApp notification interception and reply flow is working in recent logs.
-- Supported-app detection UI (green checks) is implemented locally and pending release commit.
+- Notification listener rebind recovery and watchdog health checks are implemented.
+- WhatsApp interception and auto-reply flow is working in recent real-device logs.
+- Supported-app detection and setup-status UX are implemented in Settings.
+- Main screen has been simplified; setup and diagnostics moved under Settings subpages.
+
+## Progress Tracking
+
+- See current delivery status and recent milestone commits in:
+  - [docs/PROGRESS.md](docs/PROGRESS.md)
 
 ## Phase 1: Reliability Lock (May 30, 2026 to June 12, 2026)
 
