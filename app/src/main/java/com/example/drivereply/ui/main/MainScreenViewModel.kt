@@ -211,7 +211,10 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
                 packageName = app.packageName,
                 isInstalled = isPackageInstalled(pm, app.packageName)
             )
-        }
+        }.sortedWith(
+            compareByDescending<SupportedAppDetection> { it.isInstalled }
+                .thenBy { it.label }
+        )
     }
 
     private fun isPackageInstalled(packageManager: PackageManager, packageName: String): Boolean {

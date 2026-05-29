@@ -215,6 +215,13 @@ fun MainScreen(
                 color = MaterialTheme.colorScheme.onBackground
             )
 
+            ListenerHealthCard(
+                hasPermission = uiState.hasNotificationListener,
+                isConnected = uiState.isNotificationListenerConnected,
+                onRebindClick = { viewModel.rebindNotificationListener() },
+                onOpenSettingsClick = { viewModel.openNotificationListenerSettings() }
+            )
+
             PermissionItem(
                 title = "Activity Recognition",
                 description = "Detects driving state (car movement)",
@@ -234,44 +241,6 @@ fun MainScreen(
                 isGranted = uiState.hasNotificationListener,
                 onGrantClick = { viewModel.openNotificationListenerSettings() }
             )
-
-            if (uiState.hasNotificationListener && !uiState.isNotificationListenerConnected) {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "Notification listener is not connected",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Text(
-                            text = "Auto-reply will not work until listener binds. Tap Rebind first. If still disconnected, reopen Notification Access settings.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { viewModel.rebindNotificationListener() },
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("Rebind Listener", fontWeight = FontWeight.Bold)
-                            }
-                            TextButton(onClick = { viewModel.openNotificationListenerSettings() }) {
-                                Text("Open Settings")
-                            }
-                        }
-                    }
-                }
-            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 PermissionItem(
@@ -362,12 +331,17 @@ fun MainScreen(
                             Text("Refresh")
                         }
                     }
+                    val installedCount = uiState.supportedAppDetections.count { it.isInstalled }
+                    Text(
+                        text = "$installedCount/${uiState.supportedAppDetections.size} supported apps detected",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Text(
                         text = "Installed apps show a green check. If you just installed/updated an app, reopen this screen.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    val installedCount = uiState.supportedAppDetections.count { it.isInstalled }
                     if (installedCount == 0) {
                         Text(
                             text = "No supported app detected yet on this device.",
@@ -474,6 +448,98 @@ fun ReadinessCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ListenerHealthCard(
+    hasPermission: Boolean,
+    isConnected: Boolean,
+    onRebindClick: () -> Unit,
+    onOpenSettingsClick: () -> Unit
+) {
+    val healthy = hasPermission && isConnected
+    val containerColor = if (healthy) {
+        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+    }
+    val contentColor = if (healthy) {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    } else {
+        MaterialTheme.colorScheme.onErrorContainer
+    }
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Notification Listener Health",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
+            Text(
+                text = if (healthy) {
+                    "Permission granted and listener connected."
+                } else {
+                    "Auto-reply requires both granted permission and active listener connection."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = contentColor
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = {
+                        Text(
+                            if (hasPermission) "Permission: Granted" else "Permission: Missing"
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (hasPermission) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                            contentDescription = null
+                        )
+                    }
+                )
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = {
+                        Text(
+                            if (isConnected) "Connection: Active" else "Connection: Disconnected"
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = if (isConnected) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                            contentDescription = null
+                        )
+                    }
+                )
+            }
+            if (!healthy) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onRebindClick,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Rebind Listener", fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onOpenSettingsClick) {
+                        Text("Open Settings")
+                    }
                 }
             }
         }
