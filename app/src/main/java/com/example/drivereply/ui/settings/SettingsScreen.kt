@@ -336,6 +336,18 @@ private fun SettingsSetup(
     onOpenBatteryOptimization: () -> Unit
 ) {
     PaneHint("Grant required access and verify listener health.")
+    val missingRequirements = buildList {
+        if (!setupState.hasActivityRecognition) add("Activity Recognition permission")
+        if (!setupState.hasNotificationListener) add("Notification Interceptor permission")
+        if (!setupState.isNotificationListenerConnected) add("Notification listener connection")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !setupState.hasNotificationPermission) {
+            add("Notification permission")
+        }
+        if (!setupState.isBatteryOptimizationExempt) add("Battery optimization exemption")
+        if (!setupState.hasFineLocation) add("Fine Location permission")
+    }
+    SetupSummaryCard(missingRequirements)
+
     EntryCard(
         "Notification Listener Health",
         "Permission=${setupState.hasNotificationListener}, connected=${setupState.isNotificationListenerConnected}",
@@ -382,6 +394,53 @@ private fun SettingsSetup(
                 contentDescription = null,
                 tint = if (app.isInstalled) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
             )
+        }
+    }
+}
+
+@Composable
+private fun SetupSummaryCard(missingRequirements: List<String>) {
+    val ready = missingRequirements.isEmpty()
+    val containerColor = if (ready) {
+        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+    }
+    val contentColor = if (ready) {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    } else {
+        MaterialTheme.colorScheme.onErrorContainer
+    }
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = if (ready) "Setup Ready" else "Missing Requirements",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
+            if (ready) {
+                Text(
+                    text = "All core setup requirements are complete.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor
+                )
+            } else {
+                missingRequirements.forEach { requirement ->
+                    Text(
+                        text = "- $requirement",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor
+                    )
+                }
+            }
         }
     }
 }
