@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.data.MessageTemplate
 import com.example.drivereply.service.DriveReplyService
+import com.example.drivereply.util.DebugEventLogger
 import com.example.drivereply.util.PermissionHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,6 +32,9 @@ data class MainUiState(
 )
 
 class MainScreenViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        private const val TAG = "MainScreenVM"
+    }
 
     private val app = application as DriveReplyApplication
     private val preferencesManager = app.preferencesManager
@@ -88,8 +92,10 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             val context = getApplication<Application>()
             if (enabled) {
                 DriveReplyService.start(context)
+                DebugEventLogger.log(TAG, "Service toggle ON by user")
             } else {
                 DriveReplyService.stop(context)
+                DebugEventLogger.log(TAG, "Service toggle OFF by user")
             }
         }
     }
@@ -97,10 +103,13 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
     fun toggleDrivingState() {
         if (uiState.value.isServiceEnabled) {
             val nextDriving = !uiState.value.isDriving
-            DriveReplyService.setDrivingState(nextDriving)
-            if (nextDriving) {
-                DriveReplyService.clearRepliedContacts()
-            }
+            DriveReplyService.setDrivingState(
+                nextDriving,
+                DriveReplyService.DrivingStateSource.MANUAL_SIMULATION
+            )
+            DebugEventLogger.log(TAG, "Manual simulation toggled -> $nextDriving")
+        } else {
+            DebugEventLogger.log(TAG, "Manual simulation tap ignored because service is OFF")
         }
     }
 

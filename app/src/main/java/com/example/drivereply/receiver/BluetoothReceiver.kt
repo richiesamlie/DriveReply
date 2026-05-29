@@ -6,12 +6,16 @@ import android.content.Context
 import android.content.Intent
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.service.DriveReplyService
+import com.example.drivereply.util.DebugEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class BluetoothReceiver : BroadcastReceiver() {
+    companion object {
+        private const val TAG = "BluetoothReceiver"
+    }
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
@@ -30,6 +34,7 @@ class BluetoothReceiver : BroadcastReceiver() {
                         DriveReplyService.start(context)
                         DriveReplyService.setDrivingState(true)
                         DriveReplyService.clearRepliedContacts()
+                        DebugEventLogger.log(TAG, "Matched BT connected ${device.name ?: deviceAddress}, driving mode enabled")
                         
                         // Update persistent notification
                         val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
@@ -41,6 +46,7 @@ class BluetoothReceiver : BroadcastReceiver() {
                     BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                         // End driving state
                         DriveReplyService.setDrivingState(false)
+                        DebugEventLogger.log(TAG, "Matched BT disconnected ${device.name ?: deviceAddress}, driving mode disabled")
                         val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
                             this.action = "UPDATE_NOTIFICATION"
                             putExtra("notification_text", "Service active — waiting for driving detection")
@@ -48,6 +54,8 @@ class BluetoothReceiver : BroadcastReceiver() {
                         context.startService(serviceIntent)
                     }
                 }
+            } else {
+                DebugEventLogger.log(TAG, "Ignoring BT device not in selected list: ${device.name ?: deviceAddress}")
             }
         }
     }

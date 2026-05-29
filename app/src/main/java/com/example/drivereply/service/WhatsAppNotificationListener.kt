@@ -5,11 +5,11 @@ import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import android.util.Log
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.data.MessageTemplate
 import com.example.drivereply.data.PreferencesManager
 import com.example.drivereply.data.ReplyLogEntry
+import com.example.drivereply.util.DebugEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,30 +35,34 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
         // Skip group summary notifications
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) {
-            Log.d(TAG, "Skipping group summary for package=${sbn.packageName}, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip group summary package=${sbn.packageName}, key=${sbn.key}")
             return
         }
 
         // Only process when driving
         if (!DriveReplyService.isDriving.value) {
-            Log.d(TAG, "Skipping because driving mode is OFF for package=${sbn.packageName}, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=${sbn.packageName}, key=${sbn.key}")
             return
         }
 
         val extras = sbn.notification.extras ?: return
         val contactName = extractContactName(extras) ?: sbn.key
+        DebugEventLogger.log(TAG, "Notif received package=${sbn.packageName}, contact=$contactName, key=${sbn.key}")
 
         serviceScope.launch {
             // Check group chat preference
             val isGroupConversation = isLikelyGroupConversation(sbn.packageName, extras)
             val replyInGroups = preferencesManager.replyInGroupChats.first()
             if (isGroupConversation && !replyInGroups) {
-                Log.d(TAG, "Skipping group conversation for contact=$contactName package=${sbn.packageName}")
+                DebugEventLogger.log(TAG, "Skip group conversation contact=$contactName package=${sbn.packageName}")
                 return@launch
             }
 
             // Check if already replied to this contact in this driving session
-            if (contactName in DriveReplyService.repliedContacts) return@launch
+            if (contactName in DriveReplyService.repliedContacts) {
+                DebugEventLogger.log(TAG, "Skip duplicate contact=$contactName in current driving session")
+                return@launch
+            }
 
             val app = application as DriveReplyApplication
             var template: MessageTemplate? = null
@@ -105,12 +109,15 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 template = app.database.messageTemplateDao().getActiveSuspend()
             }
 
-            if (template == null) return@launch
+            if (template == null) {
+                DebugEventLogger.log(TAG, "Skip: no active template available for contact=$contactName")
+                return@launch
+            }
 
             // Find the reply action with RemoteInput
             val replyAction = findReplyAction(sbn.notification)
             if (replyAction == null) {
-                Log.w(TAG, "No reply action found for package=${sbn.packageName}, key=${sbn.key}")
+                DebugEventLogger.log(TAG, "Skip: no reply action package=${sbn.packageName}, key=${sbn.key}")
                 return@launch
             }
 
@@ -136,6 +143,10 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
                 // Mark contact as replied
                 DriveReplyService.repliedContacts.add(contactName)
+                DebugEventLogger.log(
+                    TAG,
+                    "Auto-reply sent contact=$contactName package=${sbn.packageName} template=${template.name}"
+                )
 
                 // Log the reply
                 app.database.replyLogDao().insert(
@@ -148,7 +159,11 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 )
             } catch (e: Exception) {
                 // Failed to send reply — PendingIntent may have been revoked
-                Log.w(TAG, "Failed to send auto-reply for package=${sbn.packageName}, key=${sbn.key}", e)
+                DebugEventLogger.log(
+                    TAG,
+                    "Send failed package=${sbn.packageName}, key=${sbn.key}",
+                    e
+                )
             }
         }
     }
@@ -158,6 +173,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        DebugEventLogger.log(TAG, "Notification listener disconnected, requesting rebind")
         requestRebind(
             android.content.ComponentName(this, WhatsAppNotificationListener::class.java)
         )

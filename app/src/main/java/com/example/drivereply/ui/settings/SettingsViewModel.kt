@@ -5,8 +5,10 @@ import android.bluetooth.BluetoothManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
+import com.example.drivereply.util.DebugEventLogger
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -41,6 +43,27 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = 0
+        )
+
+    val debugLogsEnabled: StateFlow<Boolean> = preferencesManager.debugLogsEnabled
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true
+        )
+
+    val debugLogText: StateFlow<String> = DebugEventLogger.entries
+        .map { entries ->
+            if (entries.isEmpty()) {
+                "No debug logs yet. Reproduce the issue, then return here and tap Copy Logs."
+            } else {
+                entries.joinToString(separator = "\n")
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = "No debug logs yet. Reproduce the issue, then return here and tap Copy Logs."
         )
 
     fun setReplyInGroupChats(enabled: Boolean) {
@@ -86,6 +109,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             adapter.bondedDevices.map { (it.name ?: "Unknown Device") to it.address }
         } catch (_: SecurityException) {
             emptyList()
+        }
+    }
+
+    fun clearDebugLogs() {
+        DebugEventLogger.clear()
+    }
+
+    fun setDebugLogsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesManager.setDebugLogsEnabled(enabled)
         }
     }
 }

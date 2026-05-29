@@ -24,7 +24,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,10 +42,14 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val replyInGroups by viewModel.replyInGroupChats.collectAsStateWithLifecycle()
     val retentionDays by viewModel.logRetentionDays.collectAsStateWithLifecycle()
     val activeBluetoothDevices by viewModel.bluetoothDevices.collectAsStateWithLifecycle()
     val speedThreshold by viewModel.speedActivationThreshold.collectAsStateWithLifecycle()
+    val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
+    val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
+    var copiedToastVisible by remember { mutableStateOf(false) }
 
     var isBatteryExempt by remember {
         mutableStateOf(PermissionHelper.isBatteryOptimizationExempt(context))
@@ -351,6 +357,87 @@ fun SettingsScreen(
                     context.startActivity(intent)
                 }
             )
+
+            // Section: About
+            SettingsSectionHeader(title = "Debugging")
+
+            SettingsToggleCard(
+                title = "Enable Debug Logs",
+                description = "Capture detailed internal events for troubleshooting. Disable to reduce noise.",
+                icon = Icons.Default.Info,
+                checked = debugLogsEnabled,
+                onCheckedChange = { viewModel.setDebugLogsEnabled(it) }
+            )
+
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Debug Logs",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (debugLogsEnabled) {
+                            "Reproduce the issue, then tap Copy Logs and paste them into chat."
+                        } else {
+                            "Debug log capture is currently disabled."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = debugLogText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 100.dp, max = 220.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            enabled = debugLogsEnabled,
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(debugLogText))
+                                copiedToastVisible = true
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Copy Logs", fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.clearDebugLogs() },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Clear Logs", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            if (copiedToastVisible) {
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(1400)
+                    copiedToastVisible = false
+                }
+                Text(
+                    text = "Logs copied to clipboard",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
 
             // Section: About
             SettingsSectionHeader(title = "About")

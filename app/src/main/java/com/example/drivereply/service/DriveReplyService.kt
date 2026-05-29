@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.MainActivity
 import com.example.drivereply.receiver.ActivityTransitionReceiver
+import com.example.drivereply.util.DebugEventLogger
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionRequest
@@ -34,13 +35,20 @@ import kotlinx.coroutines.flow.onEach
 
 class DriveReplyService : Service() {
 
+    enum class DrivingStateSource {
+        AUTOMATIC,
+        MANUAL_SIMULATION
+    }
+
     companion object {
+        private const val TAG = "DriveReplyService"
         private const val CHANNEL_ID = "drive_reply_service"
         private const val NOTIFICATION_ID = 1001
         private const val TRANSITION_PENDING_INTENT_REQUEST_CODE = 100
 
         private val _isDriving = MutableStateFlow(false)
         val isDriving: StateFlow<Boolean> = _isDriving.asStateFlow()
+        private val _manualSimulationOverride = MutableStateFlow(false)
 
         private val _repliedContacts = mutableSetOf<String>()
         val repliedContacts: MutableSet<String> get() = _repliedContacts
@@ -49,19 +57,44 @@ class DriveReplyService : Service() {
             _repliedContacts.clear()
         }
 
-        fun setDrivingState(driving: Boolean) {
+        fun setDrivingState(
+            driving: Boolean,
+            source: DrivingStateSource = DrivingStateSource.AUTOMATIC
+        ) {
+            if (source == DrivingStateSource.AUTOMATIC && _manualSimulationOverride.value && !driving) {
+                DebugEventLogger.log(
+                    TAG,
+                    "Ignored automatic stop while manual simulation override is active"
+                )
+                return
+            }
+
+            if (source == DrivingStateSource.MANUAL_SIMULATION) {
+                _manualSimulationOverride.value = driving
+                if (driving) {
+                    clearRepliedContacts()
+                }
+            }
+
+            DebugEventLogger.log(
+                TAG,
+                "Driving state -> $driving (source=$source, manualOverride=${_manualSimulationOverride.value})"
+            )
             _isDriving.value = driving
         }
 
         fun start(context: Context) {
             val intent = Intent(context, DriveReplyService::class.java)
             context.startForegroundService(intent)
+            DebugEventLogger.log(TAG, "Foreground service start requested")
         }
 
         fun stop(context: Context) {
             val intent = Intent(context, DriveReplyService::class.java)
             context.stopService(intent)
             _isDriving.value = false
+            _manualSimulationOverride.value = false
+            DebugEventLogger.log(TAG, "Foreground service stop requested")
         }
     }
 
@@ -76,6 +109,7 @@ class DriveReplyService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        DebugEventLogger.log(TAG, "Service created")
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Service active — waiting for driving detection"))
         registerActivityTransitions()
@@ -84,6 +118,7 @@ class DriveReplyService : Service() {
         val app = application as DriveReplyApplication
         app.preferencesManager.speedActivationThreshold
             .onEach { threshold ->
+                DebugEventLogger.log(TAG, "Speed activation threshold updated to $threshold km/h")
                 if (threshold > 0) {
                     startLocationSpeedTracking(threshold)
                 } else {
@@ -98,6 +133,7 @@ class DriveReplyService : Service() {
             val text = intent.getStringExtra("notification_text")
             if (text != null) {
                 updateNotification(text)
+                DebugEventLogger.log(TAG, "Notification updated: $text")
             }
         }
         return START_STICKY
@@ -110,6 +146,8 @@ class DriveReplyService : Service() {
         stopLocationSpeedTracking()
         serviceScope.cancel()
         _isDriving.value = false
+        _manualSimulationOverride.value = false
+        DebugEventLogger.log(TAG, "Service destroyed")
         super.onDestroy()
     }
 
@@ -217,6 +255,10 @@ class DriveReplyService : Service() {
                         updateNotification(String.format("Driving detected via Speed: %.1f km/h 🚗", speedKmH))
                     } else {
                         if (_isDriving.value && speedExitRunnable == null) {
+                            DebugEventLogger.log(
+                                TAG,
+                                "Speed below threshold (${String.format("%.1f", speedKmH)} km/h), scheduling stop debounce"
+                            )
                             speedExitRunnable = Runnable {
                                 setDrivingState(false)
                                 updateNotification("Service active — waiting for driving detection")
