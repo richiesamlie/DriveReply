@@ -34,19 +34,28 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         if (!SupportedMessagingPackages.contains(sbn.packageName)) return
 
         // Skip group summary notifications
-        if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) {
+            Log.d(TAG, "Skipping group summary for package=${sbn.packageName}, key=${sbn.key}")
+            return
+        }
 
         // Only process when driving
-        if (!DriveReplyService.isDriving.value) return
+        if (!DriveReplyService.isDriving.value) {
+            Log.d(TAG, "Skipping because driving mode is OFF for package=${sbn.packageName}, key=${sbn.key}")
+            return
+        }
 
         val extras = sbn.notification.extras ?: return
         val contactName = extractContactName(extras) ?: sbn.key
 
         serviceScope.launch {
             // Check group chat preference
-            val isGroupConversation = extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false)
+            val isGroupConversation = isLikelyGroupConversation(sbn.packageName, extras)
             val replyInGroups = preferencesManager.replyInGroupChats.first()
-            if (isGroupConversation && !replyInGroups) return@launch
+            if (isGroupConversation && !replyInGroups) {
+                Log.d(TAG, "Skipping group conversation for contact=$contactName package=${sbn.packageName}")
+                return@launch
+            }
 
             // Check if already replied to this contact in this driving session
             if (contactName in DriveReplyService.repliedContacts) return@launch
@@ -212,5 +221,37 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         }
 
         return null
+    }
+
+    private fun isLikelyGroupConversation(packageName: String, extras: Bundle): Boolean {
+        val platformGroupFlag = extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false)
+        val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
+            ?.toString()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        val latestMessageSender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+            )
+            messages.asReversed().mapNotNull { message ->
+                message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: message.sender?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            }.firstOrNull()
+        } else {
+            null
+        }
+
+        // Strong signal: conversation title and sender differ (common group-chat structure).
+        val titleSenderMismatch = !conversationTitle.isNullOrEmpty() &&
+            !latestMessageSender.isNullOrEmpty() &&
+            !conversationTitle.equals(latestMessageSender, ignoreCase = true)
+
+        // WhatsApp can set EXTRA_IS_GROUP_CONVERSATION aggressively; require corroboration.
+        if (packageName.startsWith("com.whatsapp")) {
+            return titleSenderMismatch
+        }
+
+        return platformGroupFlag || titleSenderMismatch
     }
 }
