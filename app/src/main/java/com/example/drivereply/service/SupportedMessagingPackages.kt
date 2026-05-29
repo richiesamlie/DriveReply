@@ -12,6 +12,7 @@ object SupportedMessagingPackages {
         SupportedApp("WhatsApp", "com.whatsapp"),
         SupportedApp("WhatsApp Business", "com.whatsapp.w4b"),
         SupportedApp("Telegram", "org.telegram.messenger"),
+        SupportedApp("Telegram X", "org.thunderdog.challegram"),
         SupportedApp("Signal", "org.thoughtcrime.securesms"),
         SupportedApp("Messenger", "com.facebook.orca"),
         SupportedApp("Google Messages", "com.google.android.apps.messaging"),

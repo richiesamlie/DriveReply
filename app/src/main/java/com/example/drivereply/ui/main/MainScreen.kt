@@ -191,6 +191,11 @@ fun MainScreen(
                 )
             }
 
+            ReadinessCard(
+                isReady = uiState.isAutoReplyReady,
+                blockers = uiState.readinessBlockers
+            )
+
             // Permissions Checklist Section
             Text(
                 text = "Required Setup Permissions",
@@ -371,6 +376,67 @@ fun MainScreen(
             }
 
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+fun ReadinessCard(
+    isReady: Boolean,
+    blockers: List<String>
+) {
+    val containerColor = if (isReady) {
+        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+    } else {
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+    }
+    val contentColor = if (isReady) {
+        MaterialTheme.colorScheme.onTertiaryContainer
+    } else {
+        MaterialTheme.colorScheme.onErrorContainer
+    }
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = if (isReady) Icons.Default.CheckCircle else Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = contentColor
+                )
+                Text(
+                    text = if (isReady) "Auto-Reply Ready" else "Auto-Reply Not Ready",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor
+                )
+            }
+
+            if (isReady) {
+                Text(
+                    text = "All required conditions are satisfied.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor
+                )
+            } else {
+                blockers.forEach { blocker ->
+                    Text(
+                        text = "- $blocker",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor
+                    )
+                }
+            }
         }
     }
 }

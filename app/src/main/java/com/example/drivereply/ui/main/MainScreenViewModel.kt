@@ -35,6 +35,8 @@ data class MainUiState(
     val hasFineLocation: Boolean = false,
     val hasBackgroundLocation: Boolean = false,
     val supportedAppDetections: List<SupportedAppDetection> = emptyList(),
+    val isAutoReplyReady: Boolean = false,
+    val readinessBlockers: List<String> = emptyList(),
 )
 
 data class SupportedAppDetection(
@@ -99,6 +101,7 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
     )
 
     val uiState: StateFlow<MainUiState> = combine(coreState, _permissionState) { core, permissions ->
+        val blockers = buildReadinessBlockers(core, permissions)
         MainUiState(
             isServiceEnabled = core.isServiceEnabled,
             isDriving = core.isDriving,
@@ -113,6 +116,8 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             hasFineLocation = permissions.fineLocation,
             hasBackgroundLocation = permissions.backgroundLocation,
             supportedAppDetections = permissions.supportedAppDetections,
+            isAutoReplyReady = blockers.isEmpty(),
+            readinessBlockers = blockers,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
@@ -130,11 +135,15 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         )
         _permissionState.value = snapshot
         val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
+        val appDetectionSummary = snapshot.supportedAppDetections.joinToString(",") {
+            "${it.label}=${it.isInstalled}"
+        }
         DebugEventLogger.log(
             TAG,
             "Permission refresh listenerGranted=${snapshot.notificationListener}, " +
                 "listenerConnected=$listenerConnected, " +
-                "serviceEnabled=${uiState.value.isServiceEnabled}, driving=${uiState.value.isDriving}"
+                "serviceEnabled=${uiState.value.isServiceEnabled}, driving=${uiState.value.isDriving}, " +
+                "supportedApps=$appDetectionSummary"
         )
 
         if (snapshot.notificationListener && !listenerConnected) {
@@ -220,6 +229,33 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun buildReadinessBlockers(
+        core: MainCoreState,
+        permissions: PermissionSnapshot
+    ): List<String> {
+        val blockers = mutableListOf<String>()
+        if (!core.isServiceEnabled) {
+            blockers.add("Enable monitoring service")
+        }
+        if (!core.isDriving) {
+            blockers.add("Driving mode is OFF")
+        }
+        if (!permissions.notificationListener) {
+            blockers.add("Notification listener permission is not granted")
+        }
+        if (!core.isNotificationListenerConnected) {
+            blockers.add("Notification listener is not connected")
+        }
+        if (core.activeTemplate == null) {
+            blockers.add("No active auto-reply template")
+        }
+        val hasInstalledSupportedApp = permissions.supportedAppDetections.any { it.isInstalled }
+        if (!hasInstalledSupportedApp) {
+            blockers.add("No supported messaging app installed")
+        }
+        return blockers
     }
 }
 
