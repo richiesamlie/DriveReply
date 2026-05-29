@@ -94,6 +94,16 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun toggleDrivingState() {
+        if (uiState.value.isServiceEnabled) {
+            val nextDriving = !uiState.value.isDriving
+            DriveReplyService.setDrivingState(nextDriving)
+            if (nextDriving) {
+                DriveReplyService.clearRepliedContacts()
+            }
+        }
+    }
+
     fun openNotificationListenerSettings() {
         PermissionHelper.openNotificationListenerSettings(getApplication())
     }

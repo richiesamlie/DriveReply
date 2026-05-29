@@ -128,7 +128,8 @@ fun MainScreen(
             // Status Card
             StatusCard(
                 isServiceEnabled = uiState.isServiceEnabled,
-                isDriving = uiState.isDriving
+                isDriving = uiState.isDriving,
+                onCardClick = { viewModel.toggleDrivingState() }
             )
 
             // Master Toggle Switch
@@ -282,7 +283,8 @@ fun MainScreen(
 @Composable
 fun StatusCard(
     isServiceEnabled: Boolean,
-    isDriving: Boolean
+    isDriving: Boolean,
+    onCardClick: () -> Unit
 ) {
     // Pulse animation setup
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -328,8 +330,8 @@ fun StatusCard(
 
     val subtitleText = when {
         !isServiceEnabled -> "Turn on the master toggle to start"
-        isDriving -> "Auto-replying to WhatsApp messages... 🚗"
-        else -> "Waiting for vehicle activity"
+        isDriving -> "Auto-replying to messages... 🚗\n(Tap to simulate stop)"
+        else -> "Waiting for vehicle activity\n(Tap to simulate driving)"
     }
 
     Card(
@@ -337,7 +339,8 @@ fun StatusCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(200.dp)
-            .scale(if (isServiceEnabled) pulseScale else 1f),
+            .scale(if (isServiceEnabled) pulseScale else 1f)
+            .clickable(enabled = isServiceEnabled) { onCardClick() },
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Box(
