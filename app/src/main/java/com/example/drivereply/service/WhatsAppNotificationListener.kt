@@ -70,9 +70,21 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
         val extras = sbn.notification.extras ?: return
         val contactName = extractContactName(extras) ?: sbn.key
+        val dedupeKey = buildDedupeKey(sbn, contactName)
         DebugEventLogger.log(TAG, "Notif received package=$packageName, contact=$contactName, key=${sbn.key}")
 
         serviceScope.launch {
+            val selfDisplayName = extras.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)
+                ?.toString()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            if (!selfDisplayName.isNullOrEmpty() &&
+                contactName.equals(selfDisplayName, ignoreCase = true)
+            ) {
+                DebugEventLogger.log(TAG, "Skip self-message contact=$contactName package=$packageName")
+                return@launch
+            }
+
             // Check group chat preference
             val isGroupConversation = isLikelyGroupConversation(sbn.packageName, extras)
             val replyInGroups = preferencesManager.replyInGroupChats.first()
@@ -81,9 +93,9 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 return@launch
             }
 
-            // Check if already replied to this contact in this driving session
-            if (contactName in DriveReplyService.repliedContacts) {
-                DebugEventLogger.log(TAG, "Skip duplicate contact=$contactName in current driving session")
+            // Check if already replied to this conversation in this driving session
+            if (dedupeKey in DriveReplyService.repliedContacts) {
+                DebugEventLogger.log(TAG, "Skip duplicate conversation key=$dedupeKey")
                 return@launch
             }
 
@@ -164,11 +176,11 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
                 replyAction.actionIntent.send(this@WhatsAppNotificationListener, 0, fillInIntent)
 
-                // Mark contact as replied
-                DriveReplyService.repliedContacts.add(contactName)
+                // Mark conversation as replied
+                DriveReplyService.repliedContacts.add(dedupeKey)
                 DebugEventLogger.log(
                     TAG,
-                    "Auto-reply sent contact=$contactName package=$packageName template=${template.name}"
+                    "Auto-reply sent contact=$contactName package=$packageName template=${template.name} dedupeKey=$dedupeKey"
                 )
 
                 // Log the reply
@@ -211,6 +223,15 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         DebugEventLogger.log(TAG, "Notification listener destroyed")
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private fun buildDedupeKey(sbn: StatusBarNotification, contactName: String): String {
+        val conversationTag = sbn.tag?.takeIf { it.isNotBlank() }
+        return if (conversationTag != null) {
+            "${sbn.packageName}|tag:$conversationTag"
+        } else {
+            "${sbn.packageName}|contact:${contactName.lowercase()}"
+        }
     }
 
     private fun findReplyAction(notification: Notification): Notification.Action? {
