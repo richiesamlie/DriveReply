@@ -297,14 +297,10 @@ private fun SettingsHome(
     )
     val completedChecks = setupChecks.count { it }
     EntryCard(
-        "Setup Status",
+        "Setup & Access",
         "$completedChecks/${setupChecks.size} core checks completed",
         Icons.Default.Security
     ) { onSelect(SettingsPane.SETUP) }
-
-    EntryCard("Setup & Access", "Permissions, listener health, supported apps", Icons.Default.Security) {
-        onSelect(SettingsPane.SETUP)
-    }
     EntryCard("Preferences", "Reply behavior and retention", Icons.Default.Chat) {
         onSelect(SettingsPane.PREFERENCES)
     }
@@ -347,6 +343,7 @@ private fun SettingsSetup(
         if (!setupState.hasFineLocation) add("Fine Location permission")
     }
     SetupSummaryCard(missingRequirements)
+    SectionHeader("Quick Actions")
 
     EntryCard(
         "Notification Listener Health",
@@ -359,26 +356,70 @@ private fun SettingsSetup(
         TextButton(onClick = onRefresh) { Text("Refresh") }
     }
 
-    PermissionRow("Activity Recognition", setupState.hasActivityRecognition, onRequestActivityRecognition)
-    PermissionRow("Notification Interceptor", setupState.hasNotificationListener, onOpenListenerSettings)
+    SectionHeader("Permissions")
+    PermissionRow(
+        title = "Activity Recognition",
+        description = "Detects when you are likely in a vehicle.",
+        granted = setupState.hasActivityRecognition,
+        onGrantClick = onRequestActivityRecognition
+    )
+    PermissionRow(
+        title = "Notification Interceptor",
+        description = "Allows reading notifications and sending inline replies.",
+        granted = setupState.hasNotificationListener,
+        onGrantClick = onOpenListenerSettings
+    )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        PermissionRow("Notification Permission", setupState.hasNotificationPermission, onRequestNotificationPermission)
+        PermissionRow(
+            title = "Notification Permission",
+            description = "Required for foreground service notifications.",
+            granted = setupState.hasNotificationPermission,
+            onGrantClick = onRequestNotificationPermission
+        )
     }
-    PermissionRow("Battery Optimization Exempt", setupState.isBatteryOptimizationExempt, onOpenBatteryOptimization)
-    PermissionRow("Fine Location", setupState.hasFineLocation, onRequestFineLocation)
+    PermissionRow(
+        title = "Battery Optimization Exempt",
+        description = "Improves reliability when app runs in background.",
+        granted = setupState.isBatteryOptimizationExempt,
+        onGrantClick = onOpenBatteryOptimization
+    )
+    PermissionRow(
+        title = "Fine Location",
+        description = "Enables speed-based automatic activation.",
+        granted = setupState.hasFineLocation,
+        onGrantClick = onRequestFineLocation
+    )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        PermissionRow("Background Location", setupState.hasBackgroundLocation, onRequestBackgroundLocation)
+        PermissionRow(
+            title = "Background Location",
+            description = "Needed when speed trigger runs with app in background.",
+            granted = setupState.hasBackgroundLocation,
+            onGrantClick = onRequestBackgroundLocation
+        )
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        PermissionRow("Bluetooth Connect", setupState.hasBluetoothConnect, onRequestBluetooth)
+        PermissionRow(
+            title = "Bluetooth Connect",
+            description = "Lets app detect selected car Bluetooth devices.",
+            granted = setupState.hasBluetoothConnect,
+            onGrantClick = onRequestBluetooth
+        )
     }
 
     val installedCount = setupState.supportedApps.count { it.isInstalled }
+    SectionHeader("Supported Apps")
     EntryCard(
         "Supported Apps",
         "$installedCount/${setupState.supportedApps.size} supported apps detected",
         Icons.Default.Chat
     ) { }
+    if (installedCount == 0) {
+        Text(
+            "No supported messaging app detected yet.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
     setupState.supportedApps.forEach { app ->
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -657,6 +698,16 @@ private fun PaneHint(text: String) {
 }
 
 @Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary
+    )
+}
+
+@Composable
 private fun ActionCard(
     title: String,
     description: String,
@@ -695,14 +746,31 @@ private fun ActionCard(
 }
 
 @Composable
-private fun PermissionRow(title: String, granted: Boolean, onGrantClick: () -> Unit) {
+private fun PermissionRow(
+    title: String,
+    description: String,
+    granted: Boolean,
+    onGrantClick: () -> Unit
+) {
     Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (granted) "Status: Granted" else "Status: Missing",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (granted) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error
+                )
+            }
             if (granted) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
