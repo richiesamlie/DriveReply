@@ -7,9 +7,9 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
-import com.example.drivereply.service.DriveReplyService
 import com.example.drivereply.service.SupportedMessagingPackages
 import com.example.drivereply.service.WhatsAppNotificationListener
+import com.example.drivereply.service.DriveReplyService
 import com.example.drivereply.util.DebugEventLogger
 import com.example.drivereply.util.GitHubReleaseChecker
 import com.example.drivereply.util.PermissionHelper
@@ -35,6 +35,24 @@ data class UpdateCheckUiState(
     val message: String? = null
 )
 
+data class SettingsSupportedAppDetection(
+    val label: String,
+    val packageName: String,
+    val isInstalled: Boolean
+)
+
+data class SetupState(
+    val hasActivityRecognition: Boolean = false,
+    val hasNotificationListener: Boolean = false,
+    val isNotificationListenerConnected: Boolean = false,
+    val hasNotificationPermission: Boolean = false,
+    val isBatteryOptimizationExempt: Boolean = false,
+    val hasBluetoothConnect: Boolean = false,
+    val hasFineLocation: Boolean = false,
+    val hasBackgroundLocation: Boolean = false,
+    val supportedApps: List<SettingsSupportedAppDetection> = emptyList()
+)
+
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as DriveReplyApplication
@@ -44,7 +62,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             installedTag = computeInstalledGitHubStyleTag()
         )
     )
+    private val _setupState = MutableStateFlow(SetupState())
     val updateCheckState: StateFlow<UpdateCheckUiState> = _updateCheckState.asStateFlow()
+    val setupState: StateFlow<SetupState> = _setupState.asStateFlow()
 
     val replyInGroupChats: StateFlow<Boolean> = preferencesManager.replyInGroupChats
         .stateIn(
@@ -143,6 +163,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun clearDebugLogs() {
         DebugEventLogger.clear()
+    }
+
+    fun refreshSetupState() {
+        val supportedApps = detectSupportedApps()
+        _setupState.value = SetupState(
+            hasActivityRecognition = PermissionHelper.hasActivityRecognitionPermission(app),
+            hasNotificationListener = PermissionHelper.hasNotificationListenerPermission(app),
+            isNotificationListenerConnected = WhatsAppNotificationListener.isListenerConnected.value,
+            hasNotificationPermission = PermissionHelper.hasNotificationPermission(app),
+            isBatteryOptimizationExempt = PermissionHelper.isBatteryOptimizationExempt(app),
+            hasBluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(app),
+            hasFineLocation = PermissionHelper.hasFineLocationPermission(app),
+            hasBackgroundLocation = PermissionHelper.hasBackgroundLocationPermission(app),
+            supportedApps = supportedApps
+        )
     }
 
     fun setDebugLogsEnabled(enabled: Boolean) {
@@ -255,6 +290,37 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             }
         } catch (_: Exception) {
             "v0.0.0"
+        }
+    }
+
+    private fun detectSupportedApps(): List<SettingsSupportedAppDetection> {
+        val pm = app.packageManager
+        return SupportedMessagingPackages.supportedApps.map { appDef ->
+            SettingsSupportedAppDetection(
+                label = appDef.label,
+                packageName = appDef.packageName,
+                isInstalled = isPackageInstalled(pm, appDef.packageName)
+            )
+        }.sortedWith(
+            compareByDescending<SettingsSupportedAppDetection> { it.isInstalled }
+                .thenBy { it.label }
+        )
+    }
+
+    private fun isPackageInstalled(packageManager: PackageManager, packageName: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 }

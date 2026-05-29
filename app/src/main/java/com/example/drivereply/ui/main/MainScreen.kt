@@ -1,9 +1,5 @@
 package com.example.drivereply.ui.main
 
-import android.Manifest
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -13,6 +9,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -39,6 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation3.runtime.NavKey
+import com.example.drivereply.Templates
 import com.example.drivereply.Settings
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,42 +63,6 @@ fun MainScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-
-    // Permission Launchers
-    val activityRecognitionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            viewModel.refreshPermissions()
-        }
-    )
-
-    val notificationLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            viewModel.refreshPermissions()
-        }
-    )
-
-    val fineLocationLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions(),
-        onResult = { results ->
-            viewModel.refreshPermissions()
-        }
-    )
-
-    val backgroundLocationLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            viewModel.refreshPermissions()
-        }
-    )
-
-    val bluetoothConnectLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            viewModel.refreshPermissions()
-        }
-    )
 
     Scaffold(
         topBar = {
@@ -204,111 +167,23 @@ fun MainScreen(
 
             ReadinessCard(
                 isReady = uiState.isAutoReplyReady,
-                blockers = uiState.readinessBlockers
-            )
-
-            // Permissions Checklist Section
-            Text(
-                text = "Required Setup Permissions",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            ListenerHealthCard(
-                hasPermission = uiState.hasNotificationListener,
-                isConnected = uiState.isNotificationListenerConnected,
-                onRebindClick = { viewModel.rebindNotificationListener() },
-                onOpenSettingsClick = { viewModel.openNotificationListenerSettings() }
-            )
-
-            PermissionItem(
-                title = "Activity Recognition",
-                description = "Detects driving state (car movement)",
-                isGranted = uiState.hasActivityRecognition,
-                onGrantClick = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
-                    } else {
-                        viewModel.refreshPermissions()
-                    }
-                }
-            )
-
-            PermissionItem(
-                title = "Notification Interceptor",
-                description = "Interceptors incoming chat/SMS notifications to reply",
-                isGranted = uiState.hasNotificationListener,
-                onGrantClick = { viewModel.openNotificationListenerSettings() }
-            )
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                PermissionItem(
-                    title = "Notification Permission",
-                    description = "Displays the active driving service indicator",
-                    isGranted = uiState.hasNotificationPermission,
-                    onGrantClick = {
-                        notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                )
-            }
-
-            PermissionItem(
-                title = "Battery Optimization Exempt",
-                description = "Prevents Android OS from killing the service in background",
-                isGranted = uiState.isBatteryOptimized,
-                onGrantClick = { viewModel.openBatteryOptimizationSettings() }
-            )
-
-            PermissionItem(
-                title = "Fine Location",
-                description = "Enables calculated speed detection for automated start triggers",
-                isGranted = uiState.hasFineLocation,
-                onGrantClick = {
-                    fineLocationLauncher.launch(
-                        arrayOf(
-                            Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION
-                        )
-                    )
-                }
-            )
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                PermissionItem(
-                    title = "Background Location",
-                    description = "Allows speed triggers when screen is off (Choose 'Allow all the time')",
-                    isGranted = uiState.hasBackgroundLocation,
-                    onGrantClick = {
-                        if (uiState.hasFineLocation) {
-                            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                        }
-                    }
-                )
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PermissionItem(
-                    title = "Bluetooth Connection",
-                    description = "Required to query paired devices and detect car Bluetooth triggers",
-                    isGranted = uiState.hasBluetoothConnect,
-                    onGrantClick = {
-                        bluetoothConnectLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
-                    }
-                )
-            }
-
-            Text(
-                text = "Supported Apps Detected",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
+                blockers = uiState.readinessBlockers,
+                showEnableService = !uiState.isServiceEnabled,
+                showStartDriving = uiState.isServiceEnabled && !uiState.isDriving,
+                showGrantListenerAccess = !uiState.hasNotificationListener,
+                showRebindListener = uiState.hasNotificationListener && !uiState.isNotificationListenerConnected,
+                showOpenTemplates = uiState.activeTemplate == null,
+                onEnableService = { viewModel.toggleService(true) },
+                onStartDriving = { viewModel.toggleDrivingState() },
+                onGrantListenerAccess = { viewModel.openNotificationListenerSettings() },
+                onRebindListener = { viewModel.rebindNotificationListener() },
+                onOpenTemplates = { onItemClick(Templates) }
             )
 
             Card(
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -316,74 +191,16 @@ fun MainScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Text(
+                        text = "Setup, permissions, supported apps, and diagnostics are now under Settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = { onItemClick(Settings) },
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            text = "Detection Status",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        TextButton(onClick = { viewModel.refreshPermissions() }) {
-                            Text("Refresh")
-                        }
-                    }
-                    val installedCount = uiState.supportedAppDetections.count { it.isInstalled }
-                    Text(
-                        text = "$installedCount/${uiState.supportedAppDetections.size} supported apps detected",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "Installed apps show a green check. If you just installed/updated an app, reopen this screen.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (installedCount == 0) {
-                        Text(
-                            text = "No supported app detected yet on this device.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                    uiState.supportedAppDetections.forEach { app ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = app.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = app.packageName,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (app.isInstalled) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = "${app.label} installed",
-                                    tint = MaterialTheme.colorScheme.tertiary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.RadioButtonUnchecked,
-                                    contentDescription = "${app.label} not installed",
-                                    tint = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
+                        Text("Open Settings", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -394,9 +211,20 @@ fun MainScreen(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun ReadinessCard(
     isReady: Boolean,
-    blockers: List<String>
+    blockers: List<String>,
+    showEnableService: Boolean,
+    showStartDriving: Boolean,
+    showGrantListenerAccess: Boolean,
+    showRebindListener: Boolean,
+    showOpenTemplates: Boolean,
+    onEnableService: () -> Unit,
+    onStartDriving: () -> Unit,
+    onGrantListenerAccess: () -> Unit,
+    onRebindListener: () -> Unit,
+    onOpenTemplates: () -> Unit
 ) {
     val containerColor = if (isReady) {
         MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
@@ -449,96 +277,34 @@ fun ReadinessCard(
                         color = contentColor
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun ListenerHealthCard(
-    hasPermission: Boolean,
-    isConnected: Boolean,
-    onRebindClick: () -> Unit,
-    onOpenSettingsClick: () -> Unit
-) {
-    val healthy = hasPermission && isConnected
-    val containerColor = if (healthy) {
-        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)
-    } else {
-        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
-    }
-    val contentColor = if (healthy) {
-        MaterialTheme.colorScheme.onTertiaryContainer
-    } else {
-        MaterialTheme.colorScheme.onErrorContainer
-    }
-
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "Notification Listener Health",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = contentColor
-            )
-            Text(
-                text = if (healthy) {
-                    "Permission granted and listener connected."
-                } else {
-                    "Auto-reply requires both granted permission and active listener connection."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = contentColor
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(
-                    onClick = {},
-                    enabled = false,
-                    label = {
-                        Text(
-                            if (hasPermission) "Permission: Granted" else "Permission: Missing"
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (hasPermission) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                            contentDescription = null
-                        )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (showEnableService) {
+                        OutlinedButton(onClick = onEnableService, shape = RoundedCornerShape(12.dp)) {
+                            Text("Enable Service", fontWeight = FontWeight.Bold)
+                        }
                     }
-                )
-                AssistChip(
-                    onClick = {},
-                    enabled = false,
-                    label = {
-                        Text(
-                            if (isConnected) "Connection: Active" else "Connection: Disconnected"
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (isConnected) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                            contentDescription = null
-                        )
+                    if (showStartDriving) {
+                        OutlinedButton(onClick = onStartDriving, shape = RoundedCornerShape(12.dp)) {
+                            Text("Start Driving", fontWeight = FontWeight.Bold)
+                        }
                     }
-                )
-            }
-            if (!healthy) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = onRebindClick,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Rebind Listener", fontWeight = FontWeight.Bold)
+                    if (showGrantListenerAccess) {
+                        OutlinedButton(onClick = onGrantListenerAccess, shape = RoundedCornerShape(12.dp)) {
+                            Text("Grant Listener", fontWeight = FontWeight.Bold)
+                        }
                     }
-                    TextButton(onClick = onOpenSettingsClick) {
-                        Text("Open Settings")
+                    if (showRebindListener) {
+                        OutlinedButton(onClick = onRebindListener, shape = RoundedCornerShape(12.dp)) {
+                            Text("Rebind Listener", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    if (showOpenTemplates) {
+                        OutlinedButton(onClick = onOpenTemplates, shape = RoundedCornerShape(12.dp)) {
+                            Text("Open Templates", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

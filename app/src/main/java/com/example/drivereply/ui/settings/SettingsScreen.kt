@@ -1,26 +1,67 @@
 package com.example.drivereply.ui.settings
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BatteryAlert
-import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CompassCalibration
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -33,7 +74,18 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drivereply.util.PermissionHelper
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private enum class SettingsPane(val title: String) {
+    HOME("Settings"),
+    SETUP("Setup & Access"),
+    PREFERENCES("Preferences"),
+    AUTOMATION("Automation"),
+    RELIABILITY("Reliability"),
+    DEBUGGING("Debugging"),
+    UPDATES_ABOUT("Updates & About")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,6 +96,9 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val setupState by viewModel.setupState.collectAsStateWithLifecycle()
     val replyInGroups by viewModel.replyInGroupChats.collectAsStateWithLifecycle()
     val retentionDays by viewModel.logRetentionDays.collectAsStateWithLifecycle()
     val activeBluetoothDevices by viewModel.bluetoothDevices.collectAsStateWithLifecycle()
@@ -51,37 +106,55 @@ fun SettingsScreen(
     val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
     val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
     val updateState by viewModel.updateCheckState.collectAsStateWithLifecycle()
-    val coroutineScope = rememberCoroutineScope()
+
+    var pane by remember { mutableStateOf(SettingsPane.HOME) }
     var copiedNotice by remember { mutableStateOf<String?>(null) }
     var diagnosticsSnapshot by remember {
         mutableStateOf("Tap Copy Snapshot to generate a compact status report for support.")
     }
 
-    var isBatteryExempt by remember {
-        mutableStateOf(PermissionHelper.isBatteryOptimizationExempt(context))
-    }
-
-    var hasBluetoothPermission by remember {
-        mutableStateOf(PermissionHelper.hasBluetoothConnectPermission(context))
-    }
-
+    val activityRecognitionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { viewModel.refreshSetupState() }
+    )
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { viewModel.refreshSetupState() }
+    )
+    val fineLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { viewModel.refreshSetupState() }
+    )
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { viewModel.refreshSetupState() }
+    )
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            hasBluetoothPermission = isGranted
-        }
+        onResult = { viewModel.refreshSetupState() }
     )
 
-    LaunchedEffect(Unit) {
-        hasBluetoothPermission = PermissionHelper.hasBluetoothConnectPermission(context)
+    LaunchedEffect(Unit) { viewModel.refreshSetupState() }
+    LaunchedEffect(pane) {
+        if (pane == SettingsPane.SETUP) {
+            viewModel.refreshSetupState()
+        }
+    }
+    copiedNotice?.let { notice ->
+        LaunchedEffect(notice) {
+            delay(1400)
+            copiedNotice = null
+        }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                title = { Text(pane.title, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (pane == SettingsPane.HOME) onBack() else pane = SettingsPane.HOME
+                    }) {
                         Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -98,668 +171,460 @@ fun SettingsScreen(
                 .padding(paddingValues)
                 .padding(horizontal = 20.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Spacer(modifier = Modifier.height(4.dp))
-
-            // Section: Preferences
-            SettingsSectionHeader(title = "Preferences")
-
-            // Toggle for Group Chat
-            SettingsToggleCard(
-                title = "Reply in Group Chats",
-                description = "If disabled, WhatsApp group chat messages will be ignored, replying only to individual senders.",
-                icon = Icons.Default.Group,
-                checked = replyInGroups,
-                onCheckedChange = { viewModel.setReplyInGroupChats(it) }
-            )
-
-            // Log Retention Picker
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp)
-                ) {
-                    Text(
-                        text = "History Retention Duration",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Specify how long auto-reply history logs should be kept before being automatically cleared.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val options = listOf(
-                            1 to "1 Day",
-                            7 to "7 Days",
-                            30 to "30 Days",
-                            -1 to "Never"
-                        )
-                        options.forEach { (days, label) ->
-                            val isSelected = retentionDays == days
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { viewModel.setLogRetentionDays(days) },
-                                label = { Text(label, fontSize = 12.sp) },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Section: Automation Triggers
-            SettingsSectionHeader(title = "Automation Triggers")
-
-            // Speed-Based Auto-Start Card
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.DirectionsCar,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Text(
-                            text = "Speed-Based Auto-Start",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Automatically activate driving mode when your speed exceeds the selected threshold (requires GPS location permission).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val options = listOf(
-                            0 to "Disabled",
-                            15 to "15 km/h",
-                            30 to "30 km/h",
-                            50 to "50 km/h"
-                        )
-                        options.forEach { (kmh, label) ->
-                            val isSelected = speedThreshold == kmh
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { viewModel.setSpeedActivationThreshold(kmh) },
-                                label = { Text(label, fontSize = 12.sp) },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Car Bluetooth Triggers Card
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Bluetooth,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Text(
-                            text = "Car Bluetooth Triggers",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Select paired Bluetooth devices (like your car's media system) that should automatically toggle the driving mode when connected.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    if (!hasBluetoothPermission) {
-                        // Request permission button
-                        Button(
-                            onClick = {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
-                                }
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Grant Bluetooth Permission", fontWeight = FontWeight.Bold)
-                        }
-                    } else {
-                        val pairedDevices = remember(hasBluetoothPermission) {
-                            viewModel.getPairedBluetoothDevices()
-                        }
-                        
-                        if (pairedDevices.isEmpty()) {
-                            Text(
-                                text = "No paired Bluetooth devices found on your system.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+            when (pane) {
+                SettingsPane.HOME -> SettingsHome(onSelect = { pane = it })
+                SettingsPane.SETUP -> SettingsSetup(
+                    setupState = setupState,
+                    onRefresh = viewModel::refreshSetupState,
+                    onOpenListenerSettings = { PermissionHelper.openNotificationListenerSettings(context) },
+                    onRebindListener = { PermissionHelper.requestNotificationListenerRebind(context) },
+                    onRequestActivityRecognition = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                         } else {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                pairedDevices.forEach { (name, address) ->
-                                    val isChecked = activeBluetoothDevices.contains(address)
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { viewModel.toggleBluetoothDevice(address) }
-                                            .padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = name,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Text(
-                                                text = address,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Checkbox(
-                                            checked = isChecked,
-                                            onCheckedChange = { viewModel.toggleBluetoothDevice(address) }
-                                        )
-                                    }
-                                }
-                            }
+                            viewModel.refreshSetupState()
+                        }
+                    },
+                    onRequestNotificationPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    },
+                    onRequestFineLocation = {
+                        fineLocationLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    },
+                    onRequestBackgroundLocation = {
+                        if (setupState.hasFineLocation && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        }
+                    },
+                    onRequestBluetooth = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                        }
+                    },
+                    onOpenBatteryOptimization = {
+                        PermissionHelper.openBatteryOptimizationSettings(context, context.packageName)
+                    }
+                )
+                SettingsPane.PREFERENCES -> SettingsPreferences(
+                    replyInGroups = replyInGroups,
+                    retentionDays = retentionDays,
+                    onSetReplyInGroups = viewModel::setReplyInGroupChats,
+                    onSetRetentionDays = viewModel::setLogRetentionDays
+                )
+                SettingsPane.AUTOMATION -> SettingsAutomation(
+                    speedThreshold = speedThreshold,
+                    onSetSpeedThreshold = viewModel::setSpeedActivationThreshold,
+                    activeBluetoothDevices = activeBluetoothDevices,
+                    pairedDevices = viewModel.getPairedBluetoothDevices(),
+                    onToggleBluetooth = viewModel::toggleBluetoothDevice
+                )
+                SettingsPane.RELIABILITY -> SettingsReliability(
+                    batteryExempt = setupState.isBatteryOptimizationExempt,
+                    onOpenBatteryOptimization = {
+                        PermissionHelper.openBatteryOptimizationSettings(context, context.packageName)
+                    },
+                    onOpenDontKillMyApp = {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    }
+                )
+                SettingsPane.DEBUGGING -> SettingsDebugging(
+                    debugLogsEnabled = debugLogsEnabled,
+                    debugLogText = debugLogText,
+                    diagnosticsSnapshot = diagnosticsSnapshot,
+                    onSetDebugLogs = viewModel::setDebugLogsEnabled,
+                    onCopyLogs = {
+                        clipboardManager.setText(AnnotatedString(debugLogText))
+                        copiedNotice = "Logs copied to clipboard"
+                    },
+                    onClearLogs = viewModel::clearDebugLogs,
+                    onCopySnapshot = {
+                        coroutineScope.launch {
+                            val snapshot = viewModel.buildDiagnosticsSnapshot()
+                            diagnosticsSnapshot = snapshot
+                            clipboardManager.setText(AnnotatedString(snapshot))
+                            copiedNotice = "Diagnostics copied to clipboard"
                         }
                     }
-                }
-            }
-
-            // Section: Reliability & Background Tasks
-            SettingsSectionHeader(title = "App Reliability")
-
-            // Battery settings link
-            SettingsActionCard(
-                title = "Battery Optimization Settings",
-                description = if (isBatteryExempt) {
-                    "Exempted. The app is running with unrestricted battery access."
-                } else {
-                    "Tap to request battery optimization exemption to avoid background service interruption."
-                },
-                icon = Icons.Default.BatteryAlert,
-                actionLabel = if (isBatteryExempt) "Done" else "Optimize",
-                enabled = !isBatteryExempt,
-                onClick = {
-                    PermissionHelper.openBatteryOptimizationSettings(context, context.packageName)
-                    // Refresh optimization status
-                    isBatteryExempt = PermissionHelper.isBatteryOptimizationExempt(context)
-                }
-            )
-
-            // DontKillMyApp link
-            SettingsActionCard(
-                title = "OEM Restriction Instructions",
-                description = "Some manufacturers (Samsung, Xiaomi, OnePlus, etc.) heavily restrict background services. Learn how to configure your phone's auto-start rules.",
-                icon = Icons.Default.Link,
-                actionLabel = "Learn More",
-                onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(intent)
-                }
-            )
-
-            // Section: About
-            SettingsSectionHeader(title = "Debugging")
-
-            SettingsToggleCard(
-                title = "Enable Debug Logs",
-                description = "Capture detailed internal events for troubleshooting. Disable to reduce noise.",
-                icon = Icons.Default.Info,
-                checked = debugLogsEnabled,
-                onCheckedChange = { viewModel.setDebugLogsEnabled(it) }
-            )
-
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "Quick Diagnostics Snapshot",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Copies key runtime states (listener, permissions, service, supported apps) in one compact block.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = diagnosticsSnapshot,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 80.dp, max = 180.dp)
-                            .verticalScroll(rememberScrollState())
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    val snapshot = viewModel.buildDiagnosticsSnapshot()
-                                    diagnosticsSnapshot = snapshot
-                                    clipboardManager.setText(AnnotatedString(snapshot))
-                                    copiedNotice = "Diagnostics copied to clipboard"
-                                }
-                            },
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("Copy Snapshot", fontWeight = FontWeight.Bold)
+                )
+                SettingsPane.UPDATES_ABOUT -> SettingsUpdatesAbout(
+                    updateState = updateState,
+                    onCheckUpdates = viewModel::checkForUpdates,
+                    onOpenLink = { url ->
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
+                        context.startActivity(intent)
                     }
-                }
-            }
-
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "Debug Logs",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = if (debugLogsEnabled) {
-                            "Reproduce the issue, then tap Copy Logs and paste them into chat."
-                        } else {
-                            "Debug log capture is currently disabled."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = debugLogText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 100.dp, max = 220.dp)
-                            .verticalScroll(rememberScrollState())
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            enabled = debugLogsEnabled,
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(debugLogText))
-                                copiedNotice = "Logs copied to clipboard"
-                            },
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("Copy Logs", fontWeight = FontWeight.Bold)
-                        }
-                        OutlinedButton(
-                            onClick = { viewModel.clearDebugLogs() },
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("Clear Logs", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-            copiedNotice?.let { notice ->
-                LaunchedEffect(notice) {
-                    kotlinx.coroutines.delay(1400)
-                    copiedNotice = null
-                }
-                Text(
-                    text = notice,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary
                 )
             }
-
-            // Section: About
-            SettingsSectionHeader(title = "Updates")
-
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "GitHub Update Check",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Installed: ${updateState.installedTag}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "Latest: ${updateState.latestTag ?: "Not checked yet"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (!updateState.message.isNullOrBlank()) {
-                        Text(
-                            text = updateState.message!!,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (updateState.hasUpdate) {
-                                MaterialTheme.colorScheme.tertiary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { viewModel.checkForUpdates() },
-                            enabled = !updateState.isChecking,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(if (updateState.isChecking) "Checking..." else "Check Updates")
-                        }
-
-                        if (updateState.hasUpdate) {
-                            val targetUrl = updateState.downloadUrl ?: updateState.releaseUrl
-                            if (!targetUrl.isNullOrBlank()) {
-                                OutlinedButton(
-                                    onClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
-                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        }
-                                        context.startActivity(intent)
-                                    },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(
-                                        if (!updateState.downloadUrl.isNullOrBlank()) {
-                                            "Download APK"
-                                        } else {
-                                            "Open Release"
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+            copiedNotice?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
             }
-
-            // Section: About
-            SettingsSectionHeader(title = "About")
-
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
-                    )
-                    Column {
-                        Text(
-                            text = "DriveReply Auto-Assistant",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Version ${updateState.installedTag}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (!updateState.latestTag.isNullOrBlank()) {
-                            Text(
-                                text = "Latest GitHub Release ${updateState.latestTag}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Developed for seamless safety and communication while driving.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-fun SettingsSectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.ExtraBold,
-        color = MaterialTheme.colorScheme.primary,
-        letterSpacing = 0.5.sp
-    )
+private fun SettingsHome(onSelect: (SettingsPane) -> Unit) {
+    EntryCard("Setup & Access", "Permissions, listener health, supported apps", Icons.Default.Security) {
+        onSelect(SettingsPane.SETUP)
+    }
+    EntryCard("Preferences", "Reply behavior and retention", Icons.Default.Chat) {
+        onSelect(SettingsPane.PREFERENCES)
+    }
+    EntryCard("Automation", "Speed and Bluetooth triggers", Icons.Default.Speed) {
+        onSelect(SettingsPane.AUTOMATION)
+    }
+    EntryCard("Reliability", "Battery and OEM restrictions", Icons.Default.Build) {
+        onSelect(SettingsPane.RELIABILITY)
+    }
+    EntryCard("Debugging", "Diagnostics snapshot and logs", Icons.Default.CompassCalibration) {
+        onSelect(SettingsPane.DEBUGGING)
+    }
+    EntryCard("Updates & About", "Version and update checks", Icons.Default.Info) {
+        onSelect(SettingsPane.UPDATES_ABOUT)
+    }
 }
 
 @Composable
-fun SettingsToggleCard(
-    title: String,
-    description: String,
-    icon: ImageVector,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+private fun SettingsSetup(
+    setupState: SetupState,
+    onRefresh: () -> Unit,
+    onOpenListenerSettings: () -> Unit,
+    onRebindListener: () -> Unit,
+    onRequestActivityRecognition: () -> Unit,
+    onRequestNotificationPermission: () -> Unit,
+    onRequestFineLocation: () -> Unit,
+    onRequestBackgroundLocation: () -> Unit,
+    onRequestBluetooth: () -> Unit,
+    onOpenBatteryOptimization: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    EntryCard(
+        "Notification Listener Health",
+        "Permission=${setupState.hasNotificationListener}, connected=${setupState.isNotificationListenerConnected}",
+        Icons.Default.Notifications
+    ) { }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onRebindListener, shape = RoundedCornerShape(12.dp)) { Text("Rebind") }
+        TextButton(onClick = onOpenListenerSettings) { Text("Open Settings") }
+        TextButton(onClick = onRefresh) { Text("Refresh") }
+    }
+
+    PermissionRow("Activity Recognition", setupState.hasActivityRecognition, onRequestActivityRecognition)
+    PermissionRow("Notification Interceptor", setupState.hasNotificationListener, onOpenListenerSettings)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        PermissionRow("Notification Permission", setupState.hasNotificationPermission, onRequestNotificationPermission)
+    }
+    PermissionRow("Battery Optimization Exempt", setupState.isBatteryOptimizationExempt, onOpenBatteryOptimization)
+    PermissionRow("Fine Location", setupState.hasFineLocation, onRequestFineLocation)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        PermissionRow("Background Location", setupState.hasBackgroundLocation, onRequestBackgroundLocation)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        PermissionRow("Bluetooth Connect", setupState.hasBluetoothConnect, onRequestBluetooth)
+    }
+
+    val installedCount = setupState.supportedApps.count { it.isInstalled }
+    EntryCard(
+        "Supported Apps",
+        "$installedCount/${setupState.supportedApps.size} supported apps detected",
+        Icons.Default.Chat
+    ) { }
+    setupState.supportedApps.forEach { app ->
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(app.label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                Text(app.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.primary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
-                )
+            Icon(
+                imageVector = if (app.isInstalled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                contentDescription = null,
+                tint = if (app.isInstalled) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
             )
         }
     }
 }
 
 @Composable
-fun SettingsActionCard(
+private fun SettingsPreferences(
+    replyInGroups: Boolean,
+    retentionDays: Int,
+    onSetReplyInGroups: (Boolean) -> Unit,
+    onSetRetentionDays: (Int) -> Unit
+) {
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Reply in Group Chats", fontWeight = FontWeight.Bold)
+                Text("If disabled, only direct chats receive auto-replies.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = replyInGroups, onCheckedChange = onSetReplyInGroups)
+        }
+    }
+    EntryCard("History Retention", "Select how long reply logs are kept", Icons.Default.Info) { }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(1 to "1 Day", 7 to "7 Days", 30 to "30 Days", -1 to "Never").forEach { (days, label) ->
+            FilterChip(
+                selected = retentionDays == days,
+                onClick = { onSetRetentionDays(days) },
+                label = { Text(label, fontSize = 12.sp) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsAutomation(
+    speedThreshold: Int,
+    onSetSpeedThreshold: (Int) -> Unit,
+    activeBluetoothDevices: Set<String>,
+    pairedDevices: List<Pair<String, String>>,
+    onToggleBluetooth: (String) -> Unit
+) {
+    EntryCard("Speed-Based Auto-Start", "Current threshold: $speedThreshold km/h", Icons.Default.DirectionsCar) { }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(0 to "Off", 15 to "15", 30 to "30", 50 to "50").forEach { (value, label) ->
+            FilterChip(
+                selected = speedThreshold == value,
+                onClick = { onSetSpeedThreshold(value) },
+                label = { Text("$label km/h", fontSize = 12.sp) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+    EntryCard("Car Bluetooth Triggers", "Select paired devices", Icons.Default.Bluetooth) { }
+    if (pairedDevices.isEmpty()) {
+        Text("No paired Bluetooth devices found.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else {
+        pairedDevices.forEach { (name, address) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleBluetooth(address) },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(name, fontWeight = FontWeight.SemiBold)
+                    Text(address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Checkbox(
+                    checked = activeBluetoothDevices.contains(address),
+                    onCheckedChange = { onToggleBluetooth(address) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsReliability(
+    batteryExempt: Boolean,
+    onOpenBatteryOptimization: () -> Unit,
+    onOpenDontKillMyApp: () -> Unit
+) {
+    ActionCard(
+        "Battery Optimization",
+        if (batteryExempt) "Exempted" else "Open exemption request",
+        Icons.Default.BatteryAlert,
+        if (batteryExempt) "Done" else "Open",
+        !batteryExempt,
+        onOpenBatteryOptimization
+    )
+    ActionCard(
+        "OEM Restrictions",
+        "Open dontkillmyapp.com guidance",
+        Icons.Default.Link,
+        "Open",
+        true,
+        onOpenDontKillMyApp
+    )
+}
+
+@Composable
+private fun SettingsDebugging(
+    debugLogsEnabled: Boolean,
+    debugLogText: String,
+    diagnosticsSnapshot: String,
+    onSetDebugLogs: (Boolean) -> Unit,
+    onCopyLogs: () -> Unit,
+    onClearLogs: () -> Unit,
+    onCopySnapshot: () -> Unit
+) {
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Enable Debug Logs", fontWeight = FontWeight.Bold)
+                Text("Capture detailed events for troubleshooting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = debugLogsEnabled, onCheckedChange = onSetDebugLogs, colors = SwitchDefaults.colors())
+        }
+    }
+    EntryCard("Quick Diagnostics Snapshot", "Copy compact status for support", Icons.Default.CompassCalibration) { }
+    Text(
+        diagnosticsSnapshot,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 80.dp, max = 160.dp)
+            .verticalScroll(rememberScrollState())
+    )
+    Button(onClick = onCopySnapshot, shape = RoundedCornerShape(12.dp)) { Text("Copy Snapshot") }
+
+    EntryCard("Debug Logs", "Copy or clear event logs", Icons.Default.Notifications) { }
+    Text(
+        debugLogText,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 120.dp, max = 220.dp)
+            .verticalScroll(rememberScrollState())
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = onCopyLogs, enabled = debugLogsEnabled, shape = RoundedCornerShape(12.dp)) { Text("Copy Logs") }
+        OutlinedButton(onClick = onClearLogs, shape = RoundedCornerShape(12.dp)) { Text("Clear Logs") }
+    }
+}
+
+@Composable
+private fun SettingsUpdatesAbout(
+    updateState: UpdateCheckUiState,
+    onCheckUpdates: () -> Unit,
+    onOpenLink: (String) -> Unit
+) {
+    EntryCard("GitHub Update Check", "Installed ${updateState.installedTag}", Icons.Default.Info) { }
+    Text("Latest: ${updateState.latestTag ?: "Not checked yet"}", style = MaterialTheme.typography.bodySmall)
+    updateState.message?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = onCheckUpdates, enabled = !updateState.isChecking, shape = RoundedCornerShape(12.dp)) {
+            Text(if (updateState.isChecking) "Checking..." else "Check Updates")
+        }
+        if (updateState.hasUpdate) {
+            val target = updateState.downloadUrl ?: updateState.releaseUrl
+            if (!target.isNullOrBlank()) {
+                OutlinedButton(onClick = { onOpenLink(target) }, shape = RoundedCornerShape(12.dp)) {
+                    Text(if (!updateState.downloadUrl.isNullOrBlank()) "Download APK" else "Open Release")
+                }
+            }
+        }
+    }
+    EntryCard("About", "DriveReply Auto-Assistant\nVersion ${updateState.installedTag}", Icons.Default.Info) { }
+}
+
+@Composable
+private fun EntryCard(
+    title: String,
+    description: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(imageVector = icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionCard(
     title: String,
     description: String,
     icon: ImageVector,
     actionLabel: String,
-    enabled: Boolean = true,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
-    ) {
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
+            modifier = Modifier.padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(imageVector = icon, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                Column {
+                    Text(title, fontWeight = FontWeight.Bold)
+                    Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
-            Spacer(modifier = Modifier.width(12.dp))
             Button(
                 onClick = onClick,
                 enabled = enabled,
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                ),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
             ) {
-                Text(actionLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(actionLabel, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionRow(title: String, granted: Boolean, onGrantClick: () -> Unit) {
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            if (granted) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            } else {
+                Button(
+                    onClick = onGrantClick,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text("Grant", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
