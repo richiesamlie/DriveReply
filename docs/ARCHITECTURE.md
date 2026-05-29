@@ -14,7 +14,7 @@ sequenceDiagram
     participant Sensors as Android OS (GPS / Bluetooth / Transitions)
     participant Recv as Receivers (ActivityTransition / Bluetooth)
     participant Service as DriveReplyService (Foreground)
-    participant listener as MultiAppNotificationListener
+    participant listener as WhatsAppNotificationListener
     participant DB as AppDatabase (Room)
 
     Note over Sensors, Recv: Trigger Source 1: Activity Recognition IN_VEHICLE
@@ -33,9 +33,9 @@ sequenceDiagram
     
     rect rgb(30, 40, 50)
         Note right of listener: Notification Received (Any Supported App)
-        listener->>listener: Intercept: WhatsApp, Telegram, Signal, or Messenger
+        listener->>listener: Intercept: WhatsApp, Telegram, Signal, Messenger, and SMS apps
         listener->>listener: Verify NOT group chat (unless override setting active)
-        listener->>listener: Check if Sender already replied in this session
+        listener->>listener: Check if Conversation already replied in this session
         listener->>DB: Query custom template rules for Sender
         DB-->>listener: Returns matched rules list
         listener->>listener: Match rules against Current Day & Time bounds
@@ -67,7 +67,8 @@ sequenceDiagram
 
 ### A. Foreground Service (`DriveReplyService.kt`)
 To survive aggressive system memory reclaim, the monitoring is bound to a foreground service utilizing the modern `specialUse` foreground type (mandated on Android 14+ for general coordination services).
-- **Foreground States**: Exposes a global companion `StateFlow<Boolean>` representing the active driving state, and a synchronized `MutableSet<String>` of unique contact titles replied to during the current driving session.
+- **Foreground States**: Exposes a global companion `StateFlow<Boolean>` representing active driving state, plus a synchronized `MutableSet<String>` used for per-session deduplication keys.
+- **Manual Simulation Override**: Uses explicit state source (`AUTOMATIC` vs `MANUAL_SIMULATION`) to prevent automatic stop triggers from disabling manual simulation mode.
 - **GPS Speed Polling**: Employs `FusedLocationProviderClient` with low-power interval updates. Calculates real-time speed and transitions the app into driving mode if the calculated speed exceeds the user-configured speed threshold.
 
 ### B. Bluetooth Pairing Trigger (`BluetoothReceiver.kt`)
@@ -80,8 +81,11 @@ Extends `NotificationListenerService` to capture status bar notification updates
 - **Supported Packages**:
   - WhatsApp (`com.whatsapp`) & WhatsApp Business (`com.whatsapp.w4b`)
   - Telegram (`org.telegram.messenger`)
-  - Signal (`org.thoughtlight.securesms`)
+  - Signal (`org.thoughtcrime.securesms`)
   - Facebook Messenger (`com.facebook.orca`)
+  - Google Messages (`com.google.android.apps.messaging`)
+  - Samsung Messages (`com.samsung.android.messaging`)
+  - AOSP Messages (`com.android.messaging`)
 - **Platform-Agnostic Extraction**: Scans the notification `actions` array generically to locate `RemoteInput` with an editable result key, bypassing platform-specific structures to execute replies silently via:
   ```kotlin
   val results = Bundle().apply {
@@ -92,6 +96,9 @@ Extends `NotificationListenerService` to capture status bar notification updates
   }
   action.actionIntent.send(context, 0, intent)
   ```
+- **Conversation-Level Deduplication**: Dedupes by conversation identity (`package + tag` fallbacking to contact key) instead of raw contact text only.
+- **Self-Message Guard**: Ignores incoming notifications resolved as the account’s own display name.
+- **Listener Health Signals**: Exposes listener connectivity state and logs lifecycle transitions (`created`, `connected`, `disconnected`, `destroyed`) for diagnostics.
 
 ### D. Dynamic Template Rule Matching
 When a message is received, `WhatsAppNotificationListener` consults `TemplateRuleDao` with the sender's contact name:
@@ -176,3 +183,25 @@ override fun onListenerDisconnected() {
 }
 ```
 This forces the OS to re-bind the listener immediately upon memory recovery.
+
+DriveReply also includes additional recovery safeguards:
+- Home screen warns when notification access is granted but listener is not connected.
+- Home screen exposes a manual **Rebind Listener** action.
+- ViewModel can trigger rebind recovery and logs each attempt for traceability.
+
+### B. In-App Debug Logging
+DriveReply includes an internal debug log stream (`DebugEventLogger`) to simplify support and field diagnostics:
+- Runtime events are appended with timestamps (service state changes, listener events, reply decisions).
+- Settings screen exposes:
+  - `Enable Debug Logs` toggle
+  - log viewer
+  - `Copy Logs` and `Clear Logs` actions
+- This avoids mandatory ADB/logcat usage for most troubleshooting.
+
+### C. GitHub Release Versioning & Update Checks
+DriveReply now aligns application metadata and release tags:
+- CI generates release tags as `v1.0.<run_number>`.
+- APK metadata is set at build time with:
+  - `versionName = 1.0.<run_number>`
+  - `versionCode = <run_number>`
+- Settings provides update checks against GitHub Releases API (`/releases/latest`) and offers direct APK download links when newer releases exist.
