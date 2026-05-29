@@ -14,6 +14,15 @@ if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
 }
 
+val releaseVersionCode: Int = System.getenv("RELEASE_VERSION_CODE")
+    ?.toIntOrNull()
+    ?.coerceAtLeast(1)
+    ?: 1
+
+val releaseVersionName: String = System.getenv("RELEASE_VERSION_NAME")
+    ?.takeIf { it.isNotBlank() }
+    ?: "1.0.$releaseVersionCode"
+
 android {
     namespace = "com.example.drivereply"
     compileSdk = 36
@@ -21,8 +30,8 @@ android {
         applicationId = "com.example.drivereply"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
     }
 
     signingConfigs {

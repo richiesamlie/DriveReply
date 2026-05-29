@@ -16,6 +16,7 @@ data class UpdateCheckResult(
 object GitHubReleaseChecker {
     private const val LATEST_RELEASE_API =
         "https://api.github.com/repos/richiesamlie/DriveReply/releases/latest"
+    private const val LEGACY_STATIC_METADATA_LAST_TAG_PATCH = 19
 
     suspend fun checkForUpdates(installedTag: String): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         runCatching {
@@ -58,11 +59,14 @@ object GitHubReleaseChecker {
                 }
             }
 
+            val hasUpdateByTag = compareVersionTags(latestTag, installedTag) > 0
+            val suppressLegacyFalsePositive = shouldSuppressLegacyFalsePositive(installedTag, latestTag)
+
             UpdateCheckResult(
                 latestTag = latestTag,
                 releaseUrl = releaseUrl,
                 apkDownloadUrl = apkDownloadUrl,
-                hasUpdate = compareVersionTags(latestTag, installedTag) > 0
+                hasUpdate = hasUpdateByTag && !suppressLegacyFalsePositive
             )
         }
     }
@@ -86,5 +90,16 @@ object GitHubReleaseChecker {
         return versionToken
             .split('.')
             .map { part -> part.toIntOrNull() ?: 0 }
+    }
+
+    private fun shouldSuppressLegacyFalsePositive(installedTag: String, latestTag: String): Boolean {
+        // Legacy releases up to v1.0.19 were published with static app metadata (1.0 / 1),
+        // which appears as installedTag v1.0.1 regardless of actual release tag.
+        if (installedTag != "v1.0.1") return false
+        val latest = parseNumericParts(latestTag)
+        if (latest.size < 3) return false
+        return latest[0] == 1 &&
+            latest[1] == 0 &&
+            latest[2] <= LEGACY_STATIC_METADATA_LAST_TAG_PATCH
     }
 }

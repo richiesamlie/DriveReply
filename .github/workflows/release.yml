@@ -39,6 +39,8 @@ jobs:
       - name: Build Debug and Release APKs
         run: ./gradlew assembleDebug assembleRelease
         env:
+          RELEASE_VERSION_CODE: ${{ github.run_number }}
+          RELEASE_VERSION_NAME: 1.0.${{ github.run_number }}
           RELEASE_KEYSTORE_PATH: ../release-key.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.ALIAS }}
