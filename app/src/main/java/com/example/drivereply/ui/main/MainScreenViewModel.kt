@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.data.MessageTemplate
 import com.example.drivereply.service.DriveReplyService
+import com.example.drivereply.service.WhatsAppNotificationListener
 import com.example.drivereply.util.DebugEventLogger
 import com.example.drivereply.util.PermissionHelper
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,7 +76,7 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
     fun refreshPermissions() {
         val context = getApplication<Application>()
-        _permissionState.value = PermissionSnapshot(
+        val snapshot = PermissionSnapshot(
             activityRecognition = PermissionHelper.hasActivityRecognitionPermission(context),
             notificationListener = PermissionHelper.hasNotificationListenerPermission(context),
             notification = PermissionHelper.hasNotificationPermission(context),
@@ -83,6 +84,13 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             bluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(context),
             fineLocation = PermissionHelper.hasFineLocationPermission(context),
             backgroundLocation = PermissionHelper.hasBackgroundLocationPermission(context),
+        )
+        _permissionState.value = snapshot
+        DebugEventLogger.log(
+            TAG,
+            "Permission refresh listenerGranted=${snapshot.notificationListener}, " +
+                "listenerConnected=${WhatsAppNotificationListener.isListenerConnected.value}, " +
+                "serviceEnabled=${uiState.value.isServiceEnabled}, driving=${uiState.value.isDriving}"
         )
     }
 

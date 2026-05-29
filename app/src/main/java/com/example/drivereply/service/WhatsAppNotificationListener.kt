@@ -15,11 +15,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class WhatsAppNotificationListener : NotificationListenerService() {
     companion object {
         private const val TAG = "DriveReplyListener"
+        private val _isListenerConnected = MutableStateFlow(false)
+        val isListenerConnected: StateFlow<Boolean> = _isListenerConnected.asStateFlow()
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -33,6 +38,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        _isListenerConnected.value = true
         DebugEventLogger.log(TAG, "Notification listener connected")
     }
 
@@ -193,6 +199,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        _isListenerConnected.value = false
         DebugEventLogger.log(TAG, "Notification listener disconnected, requesting rebind")
         requestRebind(
             android.content.ComponentName(this, WhatsAppNotificationListener::class.java)
@@ -200,6 +207,8 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     }
 
     override fun onDestroy() {
+        _isListenerConnected.value = false
+        DebugEventLogger.log(TAG, "Notification listener destroyed")
         serviceScope.cancel()
         super.onDestroy()
     }
