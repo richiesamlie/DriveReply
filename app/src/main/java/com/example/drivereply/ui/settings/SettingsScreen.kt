@@ -175,7 +175,10 @@ fun SettingsScreen(
         ) {
             Spacer(modifier = Modifier.height(4.dp))
             when (pane) {
-                SettingsPane.HOME -> SettingsHome(onSelect = { pane = it })
+                SettingsPane.HOME -> SettingsHome(
+                    setupState = setupState,
+                    onSelect = { pane = it }
+                )
                 SettingsPane.SETUP -> SettingsSetup(
                     setupState = setupState,
                     onRefresh = viewModel::refreshSetupState,
@@ -279,7 +282,25 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingsHome(onSelect: (SettingsPane) -> Unit) {
+private fun SettingsHome(
+    setupState: SetupState,
+    onSelect: (SettingsPane) -> Unit
+) {
+    val setupChecks = listOf(
+        setupState.hasActivityRecognition,
+        setupState.hasNotificationListener,
+        setupState.isNotificationListenerConnected,
+        setupState.hasNotificationPermission,
+        setupState.isBatteryOptimizationExempt,
+        setupState.hasFineLocation
+    )
+    val completedChecks = setupChecks.count { it }
+    EntryCard(
+        "Setup Status",
+        "$completedChecks/${setupChecks.size} core checks completed",
+        Icons.Default.Security
+    ) { onSelect(SettingsPane.SETUP) }
+
     EntryCard("Setup & Access", "Permissions, listener health, supported apps", Icons.Default.Security) {
         onSelect(SettingsPane.SETUP)
     }
