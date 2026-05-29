@@ -1,9 +1,11 @@
 package com.example.drivereply.service
 
 import android.app.Notification
+import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.util.Log
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.data.MessageTemplate
 import com.example.drivereply.data.PreferencesManager
@@ -16,15 +18,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class WhatsAppNotificationListener : NotificationListenerService() {
-
     companion object {
-        private val SUPPORTED_PACKAGES = setOf(
-            "com.whatsapp",
-            "com.whatsapp.w4b",
-            "org.telegram.messenger",
-            "org.thoughtlight.securesms",
-            "com.facebook.orca"
-        )
+        private const val TAG = "DriveReplyListener"
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -36,7 +31,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName !in SUPPORTED_PACKAGES) return
+        if (!SupportedMessagingPackages.contains(sbn.packageName)) return
 
         // Skip group summary notifications
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
@@ -45,7 +40,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         if (!DriveReplyService.isDriving.value) return
 
         val extras = sbn.notification.extras ?: return
-        val contactName = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: return
+        val contactName = extractContactName(extras) ?: sbn.key
 
         serviceScope.launch {
             // Check group chat preference
@@ -104,18 +99,28 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             if (template == null) return@launch
 
             // Find the reply action with RemoteInput
-            val replyAction = findReplyAction(sbn) ?: return@launch
+            val replyAction = findReplyAction(sbn.notification)
+            if (replyAction == null) {
+                Log.w(TAG, "No reply action found for package=${sbn.packageName}, key=${sbn.key}")
+                return@launch
+            }
 
             // Send the reply
             try {
                 val remoteInputs = replyAction.remoteInputs ?: return@launch
-                val remoteInput = remoteInputs.firstOrNull() ?: return@launch
+                if (remoteInputs.isEmpty()) return@launch
 
                 val fillInIntent = android.content.Intent().apply {
                     val replyBundle = Bundle().apply {
-                        putCharSequence(remoteInput.resultKey, template.body)
+                        remoteInputs.forEach { remoteInput ->
+                            putCharSequence(remoteInput.resultKey, template.body)
+                        }
                     }
                     android.app.RemoteInput.addResultsToIntent(replyAction.remoteInputs, this, replyBundle)
+                    android.app.RemoteInput.setResultsSource(
+                        this,
+                        android.app.RemoteInput.SOURCE_FREE_FORM_INPUT
+                    )
                 }
 
                 replyAction.actionIntent.send(this@WhatsAppNotificationListener, 0, fillInIntent)
@@ -132,8 +137,9 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                         packageName = sbn.packageName
                     )
                 )
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // Failed to send reply — PendingIntent may have been revoked
+                Log.w(TAG, "Failed to send auto-reply for package=${sbn.packageName}, key=${sbn.key}", e)
             }
         }
     }
@@ -153,10 +159,58 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         super.onDestroy()
     }
 
-    private fun findReplyAction(sbn: StatusBarNotification): Notification.Action? {
-        val actions = sbn.notification.actions ?: return null
-        return actions.firstOrNull { action ->
-            action.remoteInputs?.isNotEmpty() == true
+    private fun findReplyAction(notification: Notification): Notification.Action? {
+        val candidateActions = buildList {
+            notification.actions?.let { addAll(it.asList()) }
+            addAll(Notification.WearableExtender(notification).actions)
+        }.filter { action ->
+            action.actionIntent != null && action.remoteInputs?.isNotEmpty() == true
         }
+
+        return candidateActions.maxByOrNull(::scoreReplyAction)
+    }
+
+    private fun scoreReplyAction(action: Notification.Action): Int {
+        var score = 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            action.semanticAction == Notification.Action.SEMANTIC_ACTION_REPLY
+        ) {
+            score += 100
+        }
+        if (action.allowGeneratedReplies) {
+            score += 5
+        }
+        val title = action.title?.toString()?.trim()?.lowercase()
+        if (title != null && (title.contains("reply") || title.contains("balas"))) {
+            score += 10
+        }
+        return score
+    }
+
+    private fun extractContactName(extras: Bundle): String? {
+        val directCandidates = listOf(
+            extras.getCharSequence(Notification.EXTRA_TITLE),
+            extras.getCharSequence(Notification.EXTRA_TITLE_BIG),
+            extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE),
+            extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
+        ).mapNotNull { value ->
+            value?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        if (directCandidates.isNotEmpty()) {
+            return directCandidates.first()
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+            )
+            val sender = messages.asReversed().mapNotNull { message ->
+                message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: message.sender?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            }.firstOrNull()
+            if (!sender.isNullOrEmpty()) return sender
+        }
+
+        return null
     }
 }

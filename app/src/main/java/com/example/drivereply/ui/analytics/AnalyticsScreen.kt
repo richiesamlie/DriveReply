@@ -456,7 +456,7 @@ fun DonutChart(
         "com.whatsapp" to "WhatsApp",
         "com.whatsapp.w4b" to "WhatsApp Business",
         "org.telegram.messenger" to "Telegram",
-        "org.thoughtlight.securesms" to "Signal",
+        "org.thoughtcrime.securesms" to "Signal",
         "com.facebook.orca" to "Messenger"
     )
 

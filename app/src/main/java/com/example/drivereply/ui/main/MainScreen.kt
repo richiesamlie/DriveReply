@@ -214,7 +214,7 @@ fun MainScreen(
 
             PermissionItem(
                 title = "Notification Interceptor",
-                description = "Interceptors incoming WhatsApp notifications to reply",
+                description = "Interceptors incoming chat/SMS notifications to reply",
                 isGranted = uiState.hasNotificationListener,
                 onGrantClick = { viewModel.openNotificationListenerSettings() }
             )
