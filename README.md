@@ -107,6 +107,7 @@ To function reliably in the background, DriveReply utilizes:
 
 - 🧠 **Context-Aware Local AI Auto-Replies (Pending)**: Incorporate lightweight, privacy-focused on-device models to draft custom contextual replies to complex incoming messages.
 - 📱 **Quick Settings Tile**: Add a quick settings tile for fast manual overrides to force-activate or force-disable driving monitoring.
+- 🗺️ **Execution Roadmap**: See the phased delivery plan in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ---
 

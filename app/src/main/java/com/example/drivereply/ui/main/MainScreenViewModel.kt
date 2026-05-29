@@ -1,11 +1,14 @@
 package com.example.drivereply.ui.main
 
 import android.app.Application
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.data.MessageTemplate
 import com.example.drivereply.service.DriveReplyService
+import com.example.drivereply.service.SupportedMessagingPackages
 import com.example.drivereply.service.WhatsAppNotificationListener
 import com.example.drivereply.util.DebugEventLogger
 import com.example.drivereply.util.PermissionHelper
@@ -31,6 +34,13 @@ data class MainUiState(
     val hasBluetoothConnect: Boolean = false,
     val hasFineLocation: Boolean = false,
     val hasBackgroundLocation: Boolean = false,
+    val supportedAppDetections: List<SupportedAppDetection> = emptyList(),
+)
+
+data class SupportedAppDetection(
+    val label: String,
+    val packageName: String,
+    val isInstalled: Boolean
 )
 
 private data class MainCoreState(
@@ -102,6 +112,7 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             hasBluetoothConnect = permissions.bluetoothConnect,
             hasFineLocation = permissions.fineLocation,
             hasBackgroundLocation = permissions.backgroundLocation,
+            supportedAppDetections = permissions.supportedAppDetections,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
@@ -115,6 +126,7 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             bluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(context),
             fineLocation = PermissionHelper.hasFineLocationPermission(context),
             backgroundLocation = PermissionHelper.hasBackgroundLocationPermission(context),
+            supportedAppDetections = detectSupportedApps(context),
         )
         _permissionState.value = snapshot
         val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
@@ -181,6 +193,34 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             getApplication<Application>().packageName
         )
     }
+
+    private fun detectSupportedApps(context: Application): List<SupportedAppDetection> {
+        val pm = context.packageManager
+        return SupportedMessagingPackages.supportedApps.map { app ->
+            SupportedAppDetection(
+                label = app.label,
+                packageName = app.packageName,
+                isInstalled = isPackageInstalled(pm, app.packageName)
+            )
+        }
+    }
+
+    private fun isPackageInstalled(packageManager: PackageManager, packageName: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
 }
 
 data class PermissionSnapshot(
@@ -191,4 +231,5 @@ data class PermissionSnapshot(
     val bluetoothConnect: Boolean = false,
     val fineLocation: Boolean = false,
     val backgroundLocation: Boolean = false,
+    val supportedAppDetections: List<SupportedAppDetection> = emptyList(),
 )
