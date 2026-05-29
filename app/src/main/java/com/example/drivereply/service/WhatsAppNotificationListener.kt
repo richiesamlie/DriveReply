@@ -39,7 +39,13 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         _isListenerConnected.value = true
-        DebugEventLogger.log(TAG, "Notification listener connected")
+        val startedAt = DriveReplyService.lastStartRequestedAtMs
+        if (startedAt > 0L) {
+            val latencyMs = System.currentTimeMillis() - startedAt
+            DebugEventLogger.log(TAG, "Notification listener connected (bindLatencyMs=$latencyMs)")
+        } else {
+            DebugEventLogger.log(TAG, "Notification listener connected")
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -68,7 +74,11 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return
         }
 
-        val extras = sbn.notification.extras ?: return
+        val extras = sbn.notification.extras
+        if (extras == null) {
+            DebugEventLogger.log(TAG, "Skip: notification extras missing package=$packageName, key=${sbn.key}")
+            return
+        }
         val contactName = extractContactName(extras) ?: sbn.key
         val dedupeKey = buildDedupeKey(sbn, contactName)
         DebugEventLogger.log(TAG, "Notif received package=$packageName, contact=$contactName, key=${sbn.key}")
@@ -101,6 +111,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
             val app = application as DriveReplyApplication
             var template: MessageTemplate? = null
+            var templateSource = "ACTIVE_DEFAULT"
 
             // 1. Resolve template using custom rules
             val rules = app.database.templateRuleDao().getRulesForContact(contactName)
@@ -136,6 +147,9 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
                 if (bestRule != null) {
                     template = app.database.messageTemplateDao().getById(bestRule.templateId)
+                    if (template != null) {
+                        templateSource = "RULE_MATCH"
+                    }
                 }
             }
 
@@ -148,6 +162,10 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 DebugEventLogger.log(TAG, "Skip: no active template available for contact=$contactName")
                 return@launch
             }
+            DebugEventLogger.log(
+                TAG,
+                "Template selected contact=$contactName template=${template.name} source=$templateSource"
+            )
 
             // Find the reply action with RemoteInput
             val replyAction = findReplyAction(sbn.notification)
@@ -158,8 +176,15 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
             // Send the reply
             try {
-                val remoteInputs = replyAction.remoteInputs ?: return@launch
-                if (remoteInputs.isEmpty()) return@launch
+                val remoteInputs = replyAction.remoteInputs
+                if (remoteInputs == null) {
+                    DebugEventLogger.log(TAG, "Skip: reply action remote inputs missing package=$packageName, key=${sbn.key}")
+                    return@launch
+                }
+                if (remoteInputs.isEmpty()) {
+                    DebugEventLogger.log(TAG, "Skip: reply action has empty remote inputs package=$packageName, key=${sbn.key}")
+                    return@launch
+                }
 
                 val fillInIntent = android.content.Intent().apply {
                     val replyBundle = Bundle().apply {

@@ -15,6 +15,7 @@ import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.MainActivity
 import com.example.drivereply.receiver.ActivityTransitionReceiver
 import com.example.drivereply.util.DebugEventLogger
+import com.example.drivereply.util.PermissionHelper
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionRequest
@@ -45,10 +46,15 @@ class DriveReplyService : Service() {
         private const val CHANNEL_ID = "drive_reply_service"
         private const val NOTIFICATION_ID = 1001
         private const val TRANSITION_PENDING_INTENT_REQUEST_CODE = 100
+        private const val LISTENER_HEALTH_CHECK_INTERVAL_MS = 15_000L
+        private const val LISTENER_REBIND_COOLDOWN_MS = 30_000L
 
         private val _isDriving = MutableStateFlow(false)
         val isDriving: StateFlow<Boolean> = _isDriving.asStateFlow()
         private val _manualSimulationOverride = MutableStateFlow(false)
+        @Volatile
+        private var _lastStartRequestedAtMs: Long = 0L
+        val lastStartRequestedAtMs: Long get() = _lastStartRequestedAtMs
 
         private val _repliedContacts = mutableSetOf<String>()
         val repliedContacts: MutableSet<String> get() = _repliedContacts
@@ -84,6 +90,7 @@ class DriveReplyService : Service() {
         }
 
         fun start(context: Context) {
+            _lastStartRequestedAtMs = System.currentTimeMillis()
             val intent = Intent(context, DriveReplyService::class.java)
             context.startForegroundService(intent)
             DebugEventLogger.log(TAG, "Foreground service start requested")
@@ -106,6 +113,9 @@ class DriveReplyService : Service() {
     private val speedHandler = Handler(Looper.getMainLooper())
     private var speedExitRunnable: Runnable? = null
     private var currentThreshold = 0
+    private val listenerHealthHandler = Handler(Looper.getMainLooper())
+    private var listenerHealthRunnable: Runnable? = null
+    private var lastListenerRebindAttemptMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -113,6 +123,7 @@ class DriveReplyService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Service active — waiting for driving detection"))
         registerActivityTransitions()
+        startListenerHealthWatchdog()
         
         // Listen to speed activation threshold settings from DataStore
         val app = application as DriveReplyApplication
@@ -142,6 +153,7 @@ class DriveReplyService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        stopListenerHealthWatchdog()
         unregisterActivityTransitions()
         stopLocationSpeedTracking()
         serviceScope.cancel()
@@ -285,5 +297,35 @@ class DriveReplyService : Service() {
         locationCallback = null
         speedExitRunnable?.let { speedHandler.removeCallbacks(it) }
         speedExitRunnable = null
+    }
+
+    private fun startListenerHealthWatchdog() {
+        stopListenerHealthWatchdog()
+        listenerHealthRunnable = object : Runnable {
+            override fun run() {
+                val permissionGranted = PermissionHelper.hasNotificationListenerPermission(this@DriveReplyService)
+                val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
+
+                if (permissionGranted && !listenerConnected) {
+                    val now = System.currentTimeMillis()
+                    if ((now - lastListenerRebindAttemptMs) >= LISTENER_REBIND_COOLDOWN_MS) {
+                        lastListenerRebindAttemptMs = now
+                        PermissionHelper.requestNotificationListenerRebind(this@DriveReplyService)
+                        DebugEventLogger.log(
+                            TAG,
+                            "Listener health check requested rebind (permissionGranted=true, connected=false)"
+                        )
+                    }
+                }
+
+                listenerHealthHandler.postDelayed(this, LISTENER_HEALTH_CHECK_INTERVAL_MS)
+            }
+        }
+        listenerHealthHandler.post(listenerHealthRunnable!!)
+    }
+
+    private fun stopListenerHealthWatchdog() {
+        listenerHealthRunnable?.let { listenerHealthHandler.removeCallbacks(it) }
+        listenerHealthRunnable = null
     }
 }

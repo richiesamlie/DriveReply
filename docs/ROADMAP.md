@@ -26,7 +26,8 @@ This roadmap prioritizes reliability first, then UX clarity, then scale features
 - Deliverables:
   - Structured debug logs covering full decision path (received, filtered, replied, skipped reason).
   - Stable notification listener status on Home with manual rebind fallback.
-  - Release checklist for permission and listener-state verification.
+  - Release checklist for permission and listener-state verification:
+    - [docs/PHASE1_RELIABILITY_CHECKLIST.md](docs/PHASE1_RELIABILITY_CHECKLIST.md)
 - Exit criteria:
   - `listenerConnected=true` within 10 seconds after enabling service in >95% manual test runs.
   - No duplicate auto-reply per conversation per driving session.

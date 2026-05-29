@@ -7,15 +7,23 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.drivereply.DriveReplyApplication
+import com.example.drivereply.service.DriveReplyService
+import com.example.drivereply.service.SupportedMessagingPackages
+import com.example.drivereply.service.WhatsAppNotificationListener
 import com.example.drivereply.util.DebugEventLogger
 import com.example.drivereply.util.GitHubReleaseChecker
+import com.example.drivereply.util.PermissionHelper
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class UpdateCheckUiState(
     val installedTag: String = "",
@@ -174,6 +182,50 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     )
                 }
             )
+        }
+    }
+
+    suspend fun buildDiagnosticsSnapshot(): String {
+        val generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+        val installedApps = SupportedMessagingPackages.supportedApps.joinToString(separator = ",") { supported ->
+            "${supported.label}:${isPackageInstalled(supported.packageName)}"
+        }
+
+        return buildString {
+            appendLine("[DriveReply Diagnostics]")
+            appendLine("generatedAt=$generatedAt")
+            appendLine("installedTag=${_updateCheckState.value.installedTag}")
+            appendLine("serviceEnabled=${preferencesManager.isServiceEnabled.first()}")
+            appendLine("driving=${DriveReplyService.isDriving.value}")
+            appendLine("listenerPermission=${PermissionHelper.hasNotificationListenerPermission(app)}")
+            appendLine("listenerConnected=${WhatsAppNotificationListener.isListenerConnected.value}")
+            appendLine("activityRecognitionPermission=${PermissionHelper.hasActivityRecognitionPermission(app)}")
+            appendLine("notificationPermission=${PermissionHelper.hasNotificationPermission(app)}")
+            appendLine("batteryOptimizationExempt=${PermissionHelper.isBatteryOptimizationExempt(app)}")
+            appendLine("bluetoothConnectPermission=${PermissionHelper.hasBluetoothConnectPermission(app)}")
+            appendLine("fineLocationPermission=${PermissionHelper.hasFineLocationPermission(app)}")
+            appendLine("backgroundLocationPermission=${PermissionHelper.hasBackgroundLocationPermission(app)}")
+            appendLine("replyInGroupChats=${preferencesManager.replyInGroupChats.first()}")
+            appendLine("speedThresholdKmh=${preferencesManager.speedActivationThreshold.first()}")
+            appendLine("debugLogsEnabled=${preferencesManager.debugLogsEnabled.first()}")
+            appendLine("supportedApps=$installedApps")
+        }
+    }
+
+    private fun isPackageInstalled(packageName: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                app.packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                app.packageManager.getPackageInfo(packageName, 0)
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 

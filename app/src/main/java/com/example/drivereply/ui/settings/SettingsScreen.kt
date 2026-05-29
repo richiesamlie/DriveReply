@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drivereply.util.PermissionHelper
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,7 +51,11 @@ fun SettingsScreen(
     val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
     val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
     val updateState by viewModel.updateCheckState.collectAsStateWithLifecycle()
-    var copiedToastVisible by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    var copiedNotice by remember { mutableStateOf<String?>(null) }
+    var diagnosticsSnapshot by remember {
+        mutableStateOf("Tap Copy Snapshot to generate a compact status report for support.")
+    }
 
     var isBatteryExempt by remember {
         mutableStateOf(PermissionHelper.isBatteryOptimizationExempt(context))
@@ -382,6 +387,55 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
+                        text = "Quick Diagnostics Snapshot",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Copies key runtime states (listener, permissions, service, supported apps) in one compact block.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = diagnosticsSnapshot,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 80.dp, max = 180.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    val snapshot = viewModel.buildDiagnosticsSnapshot()
+                                    diagnosticsSnapshot = snapshot
+                                    clipboardManager.setText(AnnotatedString(snapshot))
+                                    copiedNotice = "Diagnostics copied to clipboard"
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Copy Snapshot", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
                         text = "Debug Logs",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
@@ -412,7 +466,7 @@ fun SettingsScreen(
                             enabled = debugLogsEnabled,
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(debugLogText))
-                                copiedToastVisible = true
+                                copiedNotice = "Logs copied to clipboard"
                             },
                             shape = RoundedCornerShape(12.dp)
                         ) {
@@ -428,13 +482,13 @@ fun SettingsScreen(
                 }
             }
 
-            if (copiedToastVisible) {
-                LaunchedEffect(Unit) {
+            copiedNotice?.let { notice ->
+                LaunchedEffect(notice) {
                     kotlinx.coroutines.delay(1400)
-                    copiedToastVisible = false
+                    copiedNotice = null
                 }
                 Text(
-                    text = "Logs copied to clipboard",
+                    text = notice,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
