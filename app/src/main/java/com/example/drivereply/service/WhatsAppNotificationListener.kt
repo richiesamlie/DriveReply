@@ -28,33 +28,50 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     override fun onCreate() {
         super.onCreate()
         preferencesManager = (application as DriveReplyApplication).preferencesManager
+        DebugEventLogger.log(TAG, "Notification listener service created")
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        DebugEventLogger.log(TAG, "Notification listener connected")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (!SupportedMessagingPackages.contains(sbn.packageName)) return
+        val packageName = sbn.packageName
+        val isSupportedPackage = SupportedMessagingPackages.contains(packageName)
+        val isWhatsAppLike = packageName.contains("whatsapp", ignoreCase = true)
+        if (isWhatsAppLike || isSupportedPackage) {
+            DebugEventLogger.log(
+                TAG,
+                "Posted package=$packageName supported=$isSupportedPackage key=${sbn.key} " +
+                    "hasActions=${(sbn.notification.actions?.size ?: 0) > 0}"
+            )
+        }
+
+        if (!isSupportedPackage) return
 
         // Skip group summary notifications
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) {
-            DebugEventLogger.log(TAG, "Skip group summary package=${sbn.packageName}, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip group summary package=$packageName, key=${sbn.key}")
             return
         }
 
         // Only process when driving
         if (!DriveReplyService.isDriving.value) {
-            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=${sbn.packageName}, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=$packageName, key=${sbn.key}")
             return
         }
 
         val extras = sbn.notification.extras ?: return
         val contactName = extractContactName(extras) ?: sbn.key
-        DebugEventLogger.log(TAG, "Notif received package=${sbn.packageName}, contact=$contactName, key=${sbn.key}")
+        DebugEventLogger.log(TAG, "Notif received package=$packageName, contact=$contactName, key=${sbn.key}")
 
         serviceScope.launch {
             // Check group chat preference
             val isGroupConversation = isLikelyGroupConversation(sbn.packageName, extras)
             val replyInGroups = preferencesManager.replyInGroupChats.first()
             if (isGroupConversation && !replyInGroups) {
-                DebugEventLogger.log(TAG, "Skip group conversation contact=$contactName package=${sbn.packageName}")
+                DebugEventLogger.log(TAG, "Skip group conversation contact=$contactName package=$packageName")
                 return@launch
             }
 
@@ -117,7 +134,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             // Find the reply action with RemoteInput
             val replyAction = findReplyAction(sbn.notification)
             if (replyAction == null) {
-                DebugEventLogger.log(TAG, "Skip: no reply action package=${sbn.packageName}, key=${sbn.key}")
+                DebugEventLogger.log(TAG, "Skip: no reply action package=$packageName, key=${sbn.key}")
                 return@launch
             }
 
@@ -145,7 +162,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 DriveReplyService.repliedContacts.add(contactName)
                 DebugEventLogger.log(
                     TAG,
-                    "Auto-reply sent contact=$contactName package=${sbn.packageName} template=${template.name}"
+                    "Auto-reply sent contact=$contactName package=$packageName template=${template.name}"
                 )
 
                 // Log the reply
@@ -154,14 +171,14 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                         contactName = contactName,
                         templateName = template.name,
                         messageSent = template.body,
-                        packageName = sbn.packageName
+                        packageName = packageName
                     )
                 )
             } catch (e: Exception) {
                 // Failed to send reply — PendingIntent may have been revoked
                 DebugEventLogger.log(
                     TAG,
-                    "Send failed package=${sbn.packageName}, key=${sbn.key}",
+                    "Send failed package=$packageName, key=${sbn.key}",
                     e
                 )
             }
@@ -169,7 +186,10 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        // No action needed
+        val packageName = sbn.packageName
+        if (packageName.contains("whatsapp", ignoreCase = true)) {
+            DebugEventLogger.log(TAG, "Notification removed package=$packageName, key=${sbn.key}")
+        }
     }
 
     override fun onListenerDisconnected() {
