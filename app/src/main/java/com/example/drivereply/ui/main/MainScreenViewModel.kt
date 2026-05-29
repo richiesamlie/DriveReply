@@ -25,11 +25,20 @@ data class MainUiState(
     val repliesToday: Int = 0,
     val hasActivityRecognition: Boolean = false,
     val hasNotificationListener: Boolean = false,
+    val isNotificationListenerConnected: Boolean = false,
     val hasNotificationPermission: Boolean = false,
     val isBatteryOptimized: Boolean = false,
     val hasBluetoothConnect: Boolean = false,
     val hasFineLocation: Boolean = false,
     val hasBackgroundLocation: Boolean = false,
+)
+
+private data class MainCoreState(
+    val isServiceEnabled: Boolean,
+    val isDriving: Boolean,
+    val isNotificationListenerConnected: Boolean,
+    val activeTemplate: MessageTemplate?,
+    val repliesToday: Int,
 )
 
 class MainScreenViewModel(application: Application) : AndroidViewModel(application) {
@@ -44,14 +53,15 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _permissionState = MutableStateFlow(PermissionSnapshot())
     val permissionState: StateFlow<PermissionSnapshot> = _permissionState.asStateFlow()
+    private var lastListenerRebindAttemptMs: Long = 0
 
-    val uiState: StateFlow<MainUiState> = combine(
+    private val coreState: StateFlow<MainCoreState> = combine(
         preferencesManager.isServiceEnabled,
         DriveReplyService.isDriving,
+        WhatsAppNotificationListener.isListenerConnected,
         messageTemplateDao.getActive(),
-        replyLogDao.getAll(),
-        _permissionState
-    ) { enabled, driving, activeTemplate, logs, permissions ->
+        replyLogDao.getAll()
+    ) { enabled, driving, listenerConnected, activeTemplate, logs ->
         val todayStart = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -59,13 +69,34 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
-        MainUiState(
+        MainCoreState(
             isServiceEnabled = enabled,
             isDriving = driving,
+            isNotificationListenerConnected = listenerConnected,
             activeTemplate = activeTemplate,
             repliesToday = logs.count { it.timestamp >= todayStart },
+        )
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        MainCoreState(
+            isServiceEnabled = false,
+            isDriving = false,
+            isNotificationListenerConnected = false,
+            activeTemplate = null,
+            repliesToday = 0
+        )
+    )
+
+    val uiState: StateFlow<MainUiState> = combine(coreState, _permissionState) { core, permissions ->
+        MainUiState(
+            isServiceEnabled = core.isServiceEnabled,
+            isDriving = core.isDriving,
+            activeTemplate = core.activeTemplate,
+            repliesToday = core.repliesToday,
             hasActivityRecognition = permissions.activityRecognition,
             hasNotificationListener = permissions.notificationListener,
+            isNotificationListenerConnected = core.isNotificationListenerConnected,
             hasNotificationPermission = permissions.notification,
             isBatteryOptimized = permissions.batteryOptimized,
             hasBluetoothConnect = permissions.bluetoothConnect,
@@ -86,12 +117,17 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
             backgroundLocation = PermissionHelper.hasBackgroundLocationPermission(context),
         )
         _permissionState.value = snapshot
+        val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
         DebugEventLogger.log(
             TAG,
             "Permission refresh listenerGranted=${snapshot.notificationListener}, " +
-                "listenerConnected=${WhatsAppNotificationListener.isListenerConnected.value}, " +
+                "listenerConnected=$listenerConnected, " +
                 "serviceEnabled=${uiState.value.isServiceEnabled}, driving=${uiState.value.isDriving}"
         )
+
+        if (snapshot.notificationListener && !listenerConnected) {
+            attemptNotificationListenerRebind(manual = false)
+        }
     }
 
     fun toggleService(enabled: Boolean) {
@@ -123,6 +159,20 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
     fun openNotificationListenerSettings() {
         PermissionHelper.openNotificationListenerSettings(getApplication())
+    }
+
+    fun rebindNotificationListener() {
+        attemptNotificationListenerRebind(manual = true)
+    }
+
+    private fun attemptNotificationListenerRebind(manual: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!manual && (now - lastListenerRebindAttemptMs) < 30_000L) return
+
+        lastListenerRebindAttemptMs = now
+        val context = getApplication<Application>()
+        PermissionHelper.requestNotificationListenerRebind(context)
+        DebugEventLogger.log(TAG, "Requested notification listener rebind (manual=$manual)")
     }
 
     fun openBatteryOptimizationSettings() {

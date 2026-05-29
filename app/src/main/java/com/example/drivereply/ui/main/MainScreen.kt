@@ -219,6 +219,44 @@ fun MainScreen(
                 onGrantClick = { viewModel.openNotificationListenerSettings() }
             )
 
+            if (uiState.hasNotificationListener && !uiState.isNotificationListenerConnected) {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Notification listener is not connected",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "Auto-reply will not work until listener binds. Tap Rebind first. If still disconnected, reopen Notification Access settings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.rebindNotificationListener() },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Rebind Listener", fontWeight = FontWeight.Bold)
+                            }
+                            TextButton(onClick = { viewModel.openNotificationListenerSettings() }) {
+                                Text("Open Settings")
+                            }
+                        }
+                    }
+                }
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 PermissionItem(
                     title = "Notification Permission",

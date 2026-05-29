@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
 import androidx.core.content.ContextCompat
 import com.example.drivereply.service.WhatsAppNotificationListener
 
@@ -80,6 +81,27 @@ object PermissionHelper {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
+    }
+
+    fun requestNotificationListenerRebind(context: Context) {
+        val componentName = ComponentName(context, WhatsAppNotificationListener::class.java)
+        val packageManager = context.packageManager
+
+        // Force Android to recreate the listener component binding.
+        packageManager.setComponentEnabledSetting(
+            componentName,
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP
+        )
+        packageManager.setComponentEnabledSetting(
+            componentName,
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+            PackageManager.DONT_KILL_APP
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            NotificationListenerService.requestRebind(componentName)
+        }
     }
 
     fun openBatteryOptimizationSettings(context: Context, packageName: String) {
