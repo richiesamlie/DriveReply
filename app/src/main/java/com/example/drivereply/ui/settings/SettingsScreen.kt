@@ -49,6 +49,7 @@ fun SettingsScreen(
     val speedThreshold by viewModel.speedActivationThreshold.collectAsStateWithLifecycle()
     val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
     val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateCheckState.collectAsStateWithLifecycle()
     var copiedToastVisible by remember { mutableStateOf(false) }
 
     var isBatteryExempt by remember {
@@ -440,6 +441,84 @@ fun SettingsScreen(
             }
 
             // Section: About
+            SettingsSectionHeader(title = "Updates")
+
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "GitHub Update Check",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Installed: ${updateState.installedTag}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Latest: ${updateState.latestTag ?: "Not checked yet"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (!updateState.message.isNullOrBlank()) {
+                        Text(
+                            text = updateState.message!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (updateState.hasUpdate) {
+                                MaterialTheme.colorScheme.tertiary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.checkForUpdates() },
+                            enabled = !updateState.isChecking,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(if (updateState.isChecking) "Checking..." else "Check Updates")
+                        }
+
+                        if (updateState.hasUpdate) {
+                            val targetUrl = updateState.downloadUrl ?: updateState.releaseUrl
+                            if (!targetUrl.isNullOrBlank()) {
+                                OutlinedButton(
+                                    onClick = {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        if (!updateState.downloadUrl.isNullOrBlank()) {
+                                            "Download APK"
+                                        } else {
+                                            "Open Release"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section: About
             SettingsSectionHeader(title = "About")
 
             Card(
@@ -468,10 +547,17 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Version 1.0.0",
+                            text = "Version ${updateState.installedTag}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        if (!updateState.latestTag.isNullOrBlank()) {
+                            Text(
+                                text = "Latest GitHub Release ${updateState.latestTag}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "Developed for seamless safety and communication while driving.",
