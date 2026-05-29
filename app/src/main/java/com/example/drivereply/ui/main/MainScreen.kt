@@ -179,31 +179,6 @@ fun MainScreen(
                 onOpenTemplates = { onItemClick(Templates) }
             )
 
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "Setup, permissions, supported apps, and diagnostics are now under Settings.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(
-                        onClick = { onItemClick(Settings) },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Open Settings", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
