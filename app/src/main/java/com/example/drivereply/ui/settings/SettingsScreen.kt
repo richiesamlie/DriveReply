@@ -286,6 +286,7 @@ private fun SettingsHome(
     setupState: SetupState,
     onSelect: (SettingsPane) -> Unit
 ) {
+    PaneHint("Choose a category to configure DriveReply.")
     val setupChecks = listOf(
         setupState.hasActivityRecognition,
         setupState.hasNotificationListener,
@@ -334,6 +335,7 @@ private fun SettingsSetup(
     onRequestBluetooth: () -> Unit,
     onOpenBatteryOptimization: () -> Unit
 ) {
+    PaneHint("Grant required access and verify listener health.")
     EntryCard(
         "Notification Listener Health",
         "Permission=${setupState.hasNotificationListener}, connected=${setupState.isNotificationListenerConnected}",
@@ -391,6 +393,7 @@ private fun SettingsPreferences(
     onSetReplyInGroups: (Boolean) -> Unit,
     onSetRetentionDays: (Int) -> Unit
 ) {
+    PaneHint("Control reply behavior and data retention.")
     Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -421,6 +424,7 @@ private fun SettingsAutomation(
     pairedDevices: List<Pair<String, String>>,
     onToggleBluetooth: (String) -> Unit
 ) {
+    PaneHint("Configure automatic driving-mode triggers.")
     EntryCard("Speed-Based Auto-Start", "Current threshold: $speedThreshold km/h", Icons.Default.DirectionsCar) { }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(0 to "Off", 15 to "15", 30 to "30", 50 to "50").forEach { (value, label) ->
@@ -463,6 +467,7 @@ private fun SettingsReliability(
     onOpenBatteryOptimization: () -> Unit,
     onOpenDontKillMyApp: () -> Unit
 ) {
+    PaneHint("Mitigate background restrictions on your device.")
     ActionCard(
         "Battery Optimization",
         if (batteryExempt) "Exempted" else "Open exemption request",
@@ -491,6 +496,7 @@ private fun SettingsDebugging(
     onClearLogs: () -> Unit,
     onCopySnapshot: () -> Unit
 ) {
+    PaneHint("Generate diagnostics and capture logs for support.")
     Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -532,6 +538,7 @@ private fun SettingsUpdatesAbout(
     onCheckUpdates: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
+    PaneHint("Check GitHub releases and view installed version details.")
     EntryCard("GitHub Update Check", "Installed ${updateState.installedTag}", Icons.Default.Info) { }
     Text("Latest: ${updateState.latestTag ?: "Not checked yet"}", style = MaterialTheme.typography.bodySmall)
     updateState.message?.let {
@@ -579,6 +586,15 @@ private fun EntryCard(
             }
         }
     }
+}
+
+@Composable
+private fun PaneHint(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
