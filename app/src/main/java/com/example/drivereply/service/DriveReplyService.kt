@@ -27,12 +27,14 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import java.util.concurrent.ConcurrentHashMap
 
 class DriveReplyService : Service() {
 
@@ -56,8 +58,15 @@ class DriveReplyService : Service() {
         private var _lastStartRequestedAtMs: Long = 0L
         val lastStartRequestedAtMs: Long get() = _lastStartRequestedAtMs
 
-        private val _repliedContacts = mutableSetOf<String>()
-        val repliedContacts: MutableSet<String> get() = _repliedContacts
+        private val _repliedContacts: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+        fun hasRepliedToConversation(dedupeKey: String): Boolean = dedupeKey in _repliedContacts
+
+        fun markConversationReplied(dedupeKey: String): Boolean = _repliedContacts.add(dedupeKey)
+
+        fun unmarkConversationReplied(dedupeKey: String) {
+            _repliedContacts.remove(dedupeKey)
+        }
 
         fun clearRepliedContacts() {
             _repliedContacts.clear()
@@ -106,7 +115,7 @@ class DriveReplyService : Service() {
     }
 
     private var transitionPendingIntent: PendingIntent? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
     private var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient? = null
     private var locationCallback: LocationCallback? = null

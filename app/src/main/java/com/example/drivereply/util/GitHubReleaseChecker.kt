@@ -26,48 +26,51 @@ object GitHubReleaseChecker {
                 connectTimeout = 10_000
                 readTimeout = 10_000
             }
+            try {
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    throw IllegalStateException("GitHub API returned HTTP $responseCode")
+                }
 
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("GitHub API returned HTTP $responseCode")
-            }
+                val body = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(body)
+                val latestTag = json.optString("tag_name", "").ifBlank {
+                    throw IllegalStateException("Missing release tag_name")
+                }
+                val releaseUrl = json.optString("html_url", "").ifBlank {
+                    "https://github.com/richiesamlie/DriveReply/releases"
+                }
 
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
-            val json = JSONObject(body)
-            val latestTag = json.optString("tag_name", "").ifBlank {
-                throw IllegalStateException("Missing release tag_name")
-            }
-            val releaseUrl = json.optString("html_url", "").ifBlank {
-                "https://github.com/richiesamlie/DriveReply/releases"
-            }
-
-            val assets = json.optJSONArray("assets")
-            var apkDownloadUrl: String? = null
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(i) ?: continue
-                    val name = asset.optString("name")
-                    val candidateUrl = asset.optString("browser_download_url")
-                    if (name.endsWith(".apk", ignoreCase = true) && candidateUrl.isNotBlank()) {
-                        if (apkDownloadUrl == null ||
-                            (name.contains("-release.apk", ignoreCase = true) &&
-                                !name.contains("unsigned", ignoreCase = true))
-                        ) {
-                            apkDownloadUrl = candidateUrl
+                val assets = json.optJSONArray("assets")
+                var apkDownloadUrl: String? = null
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.optJSONObject(i) ?: continue
+                        val name = asset.optString("name")
+                        val candidateUrl = asset.optString("browser_download_url")
+                        if (name.endsWith(".apk", ignoreCase = true) && candidateUrl.isNotBlank()) {
+                            if (apkDownloadUrl == null ||
+                                (name.contains("-release.apk", ignoreCase = true) &&
+                                    !name.contains("unsigned", ignoreCase = true))
+                            ) {
+                                apkDownloadUrl = candidateUrl
+                            }
                         }
                     }
                 }
+
+                val hasUpdateByTag = compareVersionTags(latestTag, installedTag) > 0
+                val suppressLegacyFalsePositive = shouldSuppressLegacyFalsePositive(installedTag, latestTag)
+
+                UpdateCheckResult(
+                    latestTag = latestTag,
+                    releaseUrl = releaseUrl,
+                    apkDownloadUrl = apkDownloadUrl,
+                    hasUpdate = hasUpdateByTag && !suppressLegacyFalsePositive
+                )
+            } finally {
+                connection.disconnect()
             }
-
-            val hasUpdateByTag = compareVersionTags(latestTag, installedTag) > 0
-            val suppressLegacyFalsePositive = shouldSuppressLegacyFalsePositive(installedTag, latestTag)
-
-            UpdateCheckResult(
-                latestTag = latestTag,
-                releaseUrl = releaseUrl,
-                apkDownloadUrl = apkDownloadUrl,
-                hasUpdate = hasUpdateByTag && !suppressLegacyFalsePositive
-            )
         }
     }
 

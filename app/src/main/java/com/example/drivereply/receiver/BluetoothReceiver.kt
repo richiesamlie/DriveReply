@@ -7,6 +7,7 @@ import android.content.Intent
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.service.DriveReplyService
 import com.example.drivereply.util.DebugEventLogger
+import com.example.drivereply.util.PermissionHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -20,42 +21,72 @@ class BluetoothReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
         val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
-        val deviceAddress = device.address ?: return
 
         val app = context.applicationContext as DriveReplyApplication
         val prefs = app.preferencesManager
+        val pendingResult = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
-            val savedDevices = prefs.bluetoothDevices.first()
-            if (deviceAddress in savedDevices) {
-                when (action) {
-                    BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                        // Start service and set driving state to true
-                        DriveReplyService.start(context)
-                        DriveReplyService.setDrivingState(true)
-                        DriveReplyService.clearRepliedContacts()
-                        DebugEventLogger.log(TAG, "Matched BT connected ${device.name ?: deviceAddress}, driving mode enabled")
-                        
-                        // Update persistent notification
-                        val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
-                            this.action = "UPDATE_NOTIFICATION"
-                            putExtra("notification_text", "Driving detected via Bluetooth connection: ${device.name ?: deviceAddress}")
-                        }
-                        context.startService(serviceIntent)
+            try {
+                val hasBluetoothPermission = PermissionHelper.hasBluetoothConnectPermission(context)
+                val deviceAddress = if (hasBluetoothPermission) {
+                    try {
+                        device.address
+                    } catch (_: SecurityException) {
+                        null
                     }
-                    BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                        // End driving state
-                        DriveReplyService.setDrivingState(false)
-                        DebugEventLogger.log(TAG, "Matched BT disconnected ${device.name ?: deviceAddress}, driving mode disabled")
-                        val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
-                            this.action = "UPDATE_NOTIFICATION"
-                            putExtra("notification_text", "Service active — waiting for driving detection")
-                        }
-                        context.startService(serviceIntent)
-                    }
+                } else {
+                    null
                 }
-            } else {
-                DebugEventLogger.log(TAG, "Ignoring BT device not in selected list: ${device.name ?: deviceAddress}")
+
+                if (deviceAddress.isNullOrBlank()) {
+                    DebugEventLogger.log(TAG, "Ignoring BT event without BLUETOOTH_CONNECT permission")
+                    return@launch
+                }
+
+                val deviceLabel = if (hasBluetoothPermission) {
+                    try {
+                        device.name?.takeIf { it.isNotBlank() } ?: deviceAddress
+                    } catch (_: SecurityException) {
+                        deviceAddress
+                    }
+                } else {
+                    deviceAddress
+                }
+
+                val savedDevices = prefs.bluetoothDevices.first()
+                if (deviceAddress in savedDevices) {
+                    when (action) {
+                        BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                            // Start service and set driving state to true
+                            DriveReplyService.start(context)
+                            DriveReplyService.setDrivingState(true)
+                            DriveReplyService.clearRepliedContacts()
+                            DebugEventLogger.log(TAG, "Matched BT connected $deviceLabel, driving mode enabled")
+
+                            // Update persistent notification
+                            val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
+                                this.action = "UPDATE_NOTIFICATION"
+                                putExtra("notification_text", "Driving detected via Bluetooth connection: $deviceLabel")
+                            }
+                            context.startService(serviceIntent)
+                        }
+                        BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                            // End driving state
+                            DriveReplyService.setDrivingState(false)
+                            DebugEventLogger.log(TAG, "Matched BT disconnected $deviceLabel, driving mode disabled")
+                            val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
+                                this.action = "UPDATE_NOTIFICATION"
+                                putExtra("notification_text", "Service active — waiting for driving detection")
+                            }
+                            context.startService(serviceIntent)
+                        }
+                    }
+                } else {
+                    DebugEventLogger.log(TAG, "Ignoring BT device not in selected list: $deviceLabel")
+                }
+            } finally {
+                pendingResult.finish()
             }
         }
     }

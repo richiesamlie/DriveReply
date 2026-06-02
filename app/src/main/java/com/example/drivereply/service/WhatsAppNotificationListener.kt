@@ -104,7 +104,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             }
 
             // Check if already replied to this conversation in this driving session
-            if (dedupeKey in DriveReplyService.repliedContacts) {
+            if (DriveReplyService.hasRepliedToConversation(dedupeKey)) {
                 DebugEventLogger.log(TAG, "Skip duplicate conversation key=$dedupeKey")
                 return@launch
             }
@@ -133,7 +133,11 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
                     // Check time window
                     val timeMatch = if (rule.startTime != null && rule.endTime != null) {
-                        currentMsSinceMidnight in rule.startTime..rule.endTime
+                        if (rule.startTime <= rule.endTime) {
+                            currentMsSinceMidnight in rule.startTime..rule.endTime
+                        } else {
+                            currentMsSinceMidnight >= rule.startTime || currentMsSinceMidnight <= rule.endTime
+                        }
                     } else {
                         true
                     }
@@ -186,6 +190,11 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                     return@launch
                 }
 
+                if (!DriveReplyService.markConversationReplied(dedupeKey)) {
+                    DebugEventLogger.log(TAG, "Skip duplicate conversation key=$dedupeKey (race)")
+                    return@launch
+                }
+
                 val fillInIntent = android.content.Intent().apply {
                     val replyBundle = Bundle().apply {
                         remoteInputs.forEach { remoteInput ->
@@ -200,9 +209,6 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 }
 
                 replyAction.actionIntent.send(this@WhatsAppNotificationListener, 0, fillInIntent)
-
-                // Mark conversation as replied
-                DriveReplyService.repliedContacts.add(dedupeKey)
                 DebugEventLogger.log(
                     TAG,
                     "Auto-reply sent contact=$contactName package=$packageName template=${template.name} dedupeKey=$dedupeKey"
@@ -219,6 +225,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 )
             } catch (e: Exception) {
                 // Failed to send reply — PendingIntent may have been revoked
+                DriveReplyService.unmarkConversationReplied(dedupeKey)
                 DebugEventLogger.log(
                     TAG,
                     "Send failed package=$packageName, key=${sbn.key}",

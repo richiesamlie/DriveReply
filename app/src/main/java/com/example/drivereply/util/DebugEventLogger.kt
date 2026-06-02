@@ -55,8 +55,6 @@ object DebugEventLogger {
         enabled = value
         if (value) {
             log("DebugEventLogger", "Debug logging enabled")
-        } else {
-            Log.d("DebugEventLogger", "Debug logging disabled")
         }
     }
 }
