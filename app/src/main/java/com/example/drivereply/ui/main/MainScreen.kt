@@ -7,10 +7,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,7 +21,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -102,48 +101,8 @@ fun MainScreen(
             StatusCard(
                 isServiceEnabled = uiState.isServiceEnabled,
                 isDriving = uiState.isDriving,
-                onCardClick = { viewModel.toggleDrivingState() }
+                onToggleService = { viewModel.toggleService(it) }
             )
-
-            // Master Toggle Switch
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (uiState.isServiceEnabled) "Monitoring Active" else "Service Stopped",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (uiState.isServiceEnabled) "Checking transitions in background" else "Toggle to start driving detection",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = uiState.isServiceEnabled,
-                        onCheckedChange = { viewModel.toggleService(it) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
-                        )
-                    )
-                }
-            }
 
             // Quick Stats
             Row(
@@ -164,20 +123,44 @@ fun MainScreen(
                 )
             }
 
-            ReadinessCard(
-                isReady = uiState.isAutoReplyReady,
-                blockers = uiState.readinessBlockers,
-                showEnableService = !uiState.isServiceEnabled,
-                showStartDriving = uiState.isServiceEnabled && !uiState.isDriving,
-                showGrantListenerAccess = !uiState.hasNotificationListener,
-                showRebindListener = uiState.hasNotificationListener && !uiState.isNotificationListenerConnected,
-                showOpenTemplates = uiState.activeTemplate == null,
-                onEnableService = { viewModel.toggleService(true) },
-                onStartDriving = { viewModel.toggleDrivingState() },
-                onGrantListenerAccess = { viewModel.openNotificationListenerSettings() },
-                onRebindListener = { viewModel.rebindNotificationListener() },
-                onOpenTemplates = { onItemClick(Templates) }
-            )
+            if (uiState.templates.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Quick Template Switch",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        uiState.templates.forEach { template ->
+                            FilterChip(
+                                selected = uiState.activeTemplate?.id == template.id,
+                                onClick = { viewModel.setActiveTemplate(template.id) },
+                                label = { Text(template.name) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (!uiState.isAutoReplyReady) {
+                ReadinessCard(
+                    isReady = uiState.isAutoReplyReady,
+                    blockers = uiState.readinessBlockers,
+                    showEnableService = !uiState.isServiceEnabled,
+                    showGrantListenerAccess = !uiState.hasNotificationListener,
+                    showRebindListener = uiState.hasNotificationListener && !uiState.isNotificationListenerConnected,
+                    showOpenTemplates = uiState.activeTemplate == null,
+                    onEnableService = { viewModel.toggleService(true) },
+                    onGrantListenerAccess = { viewModel.openNotificationListenerSettings() },
+                    onRebindListener = { viewModel.rebindNotificationListener() },
+                    onOpenTemplates = { onItemClick(Templates) }
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
         }
@@ -190,12 +173,10 @@ fun ReadinessCard(
     isReady: Boolean,
     blockers: List<String>,
     showEnableService: Boolean,
-    showStartDriving: Boolean,
     showGrantListenerAccess: Boolean,
     showRebindListener: Boolean,
     showOpenTemplates: Boolean,
     onEnableService: () -> Unit,
-    onStartDriving: () -> Unit,
     onGrantListenerAccess: () -> Unit,
     onRebindListener: () -> Unit,
     onOpenTemplates: () -> Unit
@@ -260,11 +241,6 @@ fun ReadinessCard(
                             Text("Enable Service", fontWeight = FontWeight.Bold)
                         }
                     }
-                    if (showStartDriving) {
-                        OutlinedButton(onClick = onStartDriving, shape = RoundedCornerShape(12.dp)) {
-                            Text("Start Driving", fontWeight = FontWeight.Bold)
-                        }
-                    }
                     if (showGrantListenerAccess) {
                         OutlinedButton(onClick = onGrantListenerAccess, shape = RoundedCornerShape(12.dp)) {
                             Text("Grant Listener", fontWeight = FontWeight.Bold)
@@ -290,7 +266,7 @@ fun ReadinessCard(
 fun StatusCard(
     isServiceEnabled: Boolean,
     isDriving: Boolean,
-    onCardClick: () -> Unit
+    onToggleService: (Boolean) -> Unit
 ) {
     // Pulse animation setup
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -335,9 +311,9 @@ fun StatusCard(
     }
 
     val subtitleText = when {
-        !isServiceEnabled -> "Turn on the master toggle to start"
-        isDriving -> "Auto-replying to messages... 🚗\n(Tap to simulate stop)"
-        else -> "Waiting for vehicle activity\n(Tap to simulate driving)"
+        !isServiceEnabled -> "Enable monitoring to start automatic detection."
+        isDriving -> "Auto-reply is active while you're driving."
+        else -> "Monitoring for driving activity."
     }
 
     Card(
@@ -345,8 +321,7 @@ fun StatusCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(200.dp)
-            .scale(if (isServiceEnabled) pulseScale else 1f)
-            .clickable(enabled = isServiceEnabled) { onCardClick() },
+            .scale(if (isServiceEnabled) pulseScale else 1f),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Box(
@@ -387,6 +362,17 @@ fun StatusCard(
                     color = Color.White.copy(alpha = 0.9f),
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Switch(
+                    checked = isServiceEnabled,
+                    onCheckedChange = onToggleService,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = Color.White.copy(alpha = 0.45f),
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = Color.White.copy(alpha = 0.35f)
+                    )
                 )
             }
         }
@@ -440,4 +426,3 @@ fun StatCard(
         }
     }
 }
-

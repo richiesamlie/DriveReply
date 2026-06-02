@@ -115,6 +115,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             initialValue = "No debug logs yet. Reproduce the issue, then return here and tap Copy Logs."
         )
 
+    val isDriving: StateFlow<Boolean> = DriveReplyService.isDriving
+
     fun setReplyInGroupChats(enabled: Boolean) {
         viewModelScope.launch {
             preferencesManager.setReplyInGroupChats(enabled)
@@ -184,6 +186,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             preferencesManager.setDebugLogsEnabled(enabled)
         }
+    }
+
+    fun setManualDrivingSimulation(enabled: Boolean) {
+        DriveReplyService.setDrivingState(
+            enabled,
+            DriveReplyService.DrivingStateSource.MANUAL_SIMULATION
+        )
     }
 
     fun checkForUpdates() {

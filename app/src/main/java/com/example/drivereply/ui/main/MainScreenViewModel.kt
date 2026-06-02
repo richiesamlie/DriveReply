@@ -25,6 +25,7 @@ data class MainUiState(
     val isServiceEnabled: Boolean = false,
     val isDriving: Boolean = false,
     val activeTemplate: MessageTemplate? = null,
+    val templates: List<MessageTemplate> = emptyList(),
     val repliesToday: Int = 0,
     val hasActivityRecognition: Boolean = false,
     val hasNotificationListener: Boolean = false,
@@ -100,12 +101,19 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         )
     )
 
-    val uiState: StateFlow<MainUiState> = combine(coreState, _permissionState) { core, permissions ->
+    private val allTemplates: StateFlow<List<MessageTemplate>> = messageTemplateDao.getAll().stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
+
+    val uiState: StateFlow<MainUiState> = combine(coreState, _permissionState, allTemplates) { core, permissions, templates ->
         val blockers = buildReadinessBlockers(core, permissions)
         MainUiState(
             isServiceEnabled = core.isServiceEnabled,
             isDriving = core.isDriving,
             activeTemplate = core.activeTemplate,
+            templates = templates,
             repliesToday = core.repliesToday,
             hasActivityRecognition = permissions.activityRecognition,
             hasNotificationListener = permissions.notificationListener,
@@ -178,6 +186,12 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun setActiveTemplate(templateId: String) {
+        viewModelScope.launch {
+            messageTemplateDao.setActive(templateId)
+        }
+    }
+
     fun openNotificationListenerSettings() {
         PermissionHelper.openNotificationListenerSettings(getApplication())
     }
@@ -241,9 +255,6 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
         val blockers = mutableListOf<String>()
         if (!core.isServiceEnabled) {
             blockers.add("Enable monitoring service")
-        }
-        if (!core.isDriving) {
-            blockers.add("Driving mode is OFF")
         }
         if (!permissions.notificationListener) {
             blockers.add("Notification listener permission is not granted")

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -105,6 +106,7 @@ fun SettingsScreen(
     val speedThreshold by viewModel.speedActivationThreshold.collectAsStateWithLifecycle()
     val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
     val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
+    val isDriving by viewModel.isDriving.collectAsStateWithLifecycle()
     val updateState by viewModel.updateCheckState.collectAsStateWithLifecycle()
 
     var pane by remember { mutableStateOf(SettingsPane.HOME) }
@@ -145,6 +147,9 @@ fun SettingsScreen(
             delay(1400)
             copiedNotice = null
         }
+    }
+    BackHandler(enabled = pane != SettingsPane.HOME) {
+        pane = SettingsPane.HOME
     }
 
     Scaffold(
@@ -245,9 +250,11 @@ fun SettingsScreen(
                 )
                 SettingsPane.DEBUGGING -> SettingsDebugging(
                     debugLogsEnabled = debugLogsEnabled,
+                    isDriving = isDriving,
                     debugLogText = debugLogText,
                     diagnosticsSnapshot = diagnosticsSnapshot,
                     onSetDebugLogs = viewModel::setDebugLogsEnabled,
+                    onSetDrivingSimulation = viewModel::setManualDrivingSimulation,
                     onCopyLogs = {
                         clipboardManager.setText(AnnotatedString(debugLogText))
                         copiedNotice = "Logs copied to clipboard"
@@ -589,9 +596,11 @@ private fun SettingsReliability(
 @Composable
 private fun SettingsDebugging(
     debugLogsEnabled: Boolean,
+    isDriving: Boolean,
     debugLogText: String,
     diagnosticsSnapshot: String,
     onSetDebugLogs: (Boolean) -> Unit,
+    onSetDrivingSimulation: (Boolean) -> Unit,
     onCopyLogs: () -> Unit,
     onClearLogs: () -> Unit,
     onCopySnapshot: () -> Unit
@@ -604,6 +613,15 @@ private fun SettingsDebugging(
                 Text("Capture detailed events for troubleshooting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(checked = debugLogsEnabled, onCheckedChange = onSetDebugLogs, colors = SwitchDefaults.colors())
+        }
+    }
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Simulate Driving", fontWeight = FontWeight.Bold)
+                Text("Use manual simulation for testing without moving.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = isDriving, onCheckedChange = onSetDrivingSimulation)
         }
     }
     EntryCard("Quick Diagnostics Snapshot", "Copy compact status for support", Icons.Default.CompassCalibration) { }

@@ -53,91 +53,11 @@ fun ReplyLogScreen(
         },
         modifier = modifier
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            // Retention Info Bar
-            val retentionText = when {
-                retentionDays < 0 -> "Logs are kept indefinitely."
-                retentionDays == 1 -> "Logs are automatically deleted after 1 day."
-                else -> "Logs are automatically deleted after $retentionDays days."
-            }
-
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = "Info",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = retentionText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-
-            if (logs.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp)
-                    ) {
-                        Text(
-                            text = "📭",
-                            fontSize = 48.sp
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "No Auto-Replies Yet",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "When you are driving and receive WhatsApp messages, replies will be logged here.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(logs, key = { it.id }) { log ->
-                        ReplyLogCard(log = log)
-                    }
-                }
-            }
-        }
+        ReplyLogContent(
+            logs = logs,
+            retentionDays = retentionDays,
+            contentPadding = paddingValues
+        )
     }
 
     // Clear Logs Confirmation Dialog
@@ -162,6 +82,114 @@ fun ReplyLogScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+fun ReplyLogPanel(
+    modifier: Modifier = Modifier,
+    viewModel: ReplyLogViewModel = viewModel()
+) {
+    val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val retentionDays by viewModel.logRetentionDays.collectAsStateWithLifecycle()
+    ReplyLogContent(
+        logs = logs,
+        retentionDays = retentionDays,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun ReplyLogContent(
+    logs: List<ReplyLogEntry>,
+    retentionDays: Int,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp)
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(contentPadding)
+    ) {
+        // Retention Info Bar
+        val retentionText = when {
+            retentionDays < 0 -> "Logs are kept indefinitely."
+            retentionDays == 1 -> "Logs are automatically deleted after 1 day."
+            else -> "Logs are automatically deleted after $retentionDays days."
+        }
+
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "Info",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = retentionText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+
+        if (logs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Text(
+                        text = "📭",
+                        fontSize = 48.sp
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "No Auto-Replies Yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "When you are driving and receive WhatsApp messages, replies will be logged here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(logs, key = { it.id }) { log ->
+                    ReplyLogCard(log = log)
+                }
+            }
+        }
     }
 }
 

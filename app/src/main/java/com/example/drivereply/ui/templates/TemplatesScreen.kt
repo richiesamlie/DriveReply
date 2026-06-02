@@ -1,9 +1,6 @@
 package com.example.drivereply.ui.templates
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,12 +9,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -25,21 +22,30 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drivereply.data.MessageTemplate
+import com.example.drivereply.data.TemplateRule
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TemplatesScreen(
     onAddEditTemplate: (String?) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: TemplatesViewModel = viewModel()
 ) {
     val templates by viewModel.templates.collectAsStateWithLifecycle()
+    val templateRules by viewModel.templateRules.collectAsStateWithLifecycle()
     var templateToDelete by remember { mutableStateOf<MessageTemplate?>(null) }
+    val rulesByTemplate = remember(templateRules) { templateRules.groupBy { it.templateId } }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Auto-Reply Templates", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(imageVector = Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
                 )
@@ -86,6 +92,10 @@ fun TemplatesScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { onAddEditTemplate(null) }) {
+                        Text("Create My First Template")
+                    }
                 }
             }
         } else {
@@ -98,10 +108,7 @@ fun TemplatesScreen(
             ) {
                 items(templates, key = { it.id }) { template ->
                     val isSelected = template.isActive
-                    val borderColor by animateColorAsState(
-                        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                        label = "borderColor"
-                    )
+                    val summaries = buildRuleSummary(rulesByTemplate[template.id].orEmpty())
 
                     Card(
                         shape = RoundedCornerShape(20.dp),
@@ -114,12 +121,8 @@ fun TemplatesScreen(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(2.dp, borderColor, RoundedCornerShape(20.dp))
-                            .clip(RoundedCornerShape(20.dp))
-                            .combinedClickable(
-                                onClick = { viewModel.setActiveTemplate(template.id) },
-                                onLongClick = { onAddEditTemplate(template.id) }
-                            )
+                            .padding(vertical = 2.dp),
+                        onClick = { viewModel.setActiveTemplate(template.id) }
                     ) {
                         Column(
                             modifier = Modifier
@@ -135,6 +138,11 @@ fun TemplatesScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.weight(1f)
                                 ) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = { viewModel.setActiveTemplate(template.id) }
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = template.name,
                                         style = MaterialTheme.typography.titleMedium,
@@ -154,6 +162,14 @@ fun TemplatesScreen(
 
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(
+                                        onClick = { onAddEditTemplate(template.id) }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit"
+                                        )
+                                    }
+                                    IconButton(
                                         onClick = { templateToDelete = template }
                                     ) {
                                         Icon(
@@ -171,9 +187,24 @@ fun TemplatesScreen(
                                 text = template.body,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 3,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
+
+                            if (summaries.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    summaries.forEach { summary ->
+                                        AssistChip(
+                                            onClick = {},
+                                            label = { Text(summary, style = MaterialTheme.typography.labelSmall) }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -204,4 +235,49 @@ fun TemplatesScreen(
             }
         )
     }
+}
+
+private fun buildRuleSummary(rules: List<TemplateRule>): List<String> {
+    if (rules.isEmpty()) return listOf("Any time", "All contacts")
+
+    val summaries = mutableListOf<String>()
+
+    val dayRule = rules.firstOrNull { !it.daysOfWeek.isNullOrBlank() }?.daysOfWeek
+    if (!dayRule.isNullOrBlank()) {
+        summaries.add(formatDays(dayRule))
+    }
+
+    val timeRule = rules.firstOrNull { it.startTime != null && it.endTime != null }
+    if (timeRule != null) {
+        summaries.add("${formatTime(timeRule.startTime!!)}-${formatTime(timeRule.endTime!!)}")
+    }
+
+    val contacts = rules.mapNotNull { it.contactName?.takeIf { name -> name.isNotBlank() } }.distinct()
+    summaries.add(if (contacts.isEmpty()) "All contacts" else "${contacts.size} contact(s)")
+
+    return summaries
+}
+
+private fun formatDays(daysValue: String): String {
+    val dayMap = mapOf(
+        1 to "Mon",
+        2 to "Tue",
+        3 to "Wed",
+        4 to "Thu",
+        5 to "Fri",
+        6 to "Sat",
+        7 to "Sun"
+    )
+    val labels = daysValue.split(",")
+        .mapNotNull { it.trim().toIntOrNull() }
+        .mapNotNull { dayMap[it] }
+
+    return if (labels.isEmpty()) "Any day" else labels.joinToString(", ")
+}
+
+private fun formatTime(msFromMidnight: Long): String {
+    val totalMinutes = (msFromMidnight / 60_000L).toInt()
+    val hour = totalMinutes / 60
+    val minute = totalMinutes % 60
+    return String.format("%02d:%02d", hour, minute)
 }

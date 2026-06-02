@@ -1,17 +1,12 @@
 package com.example.drivereply.ui.analytics
 
-import android.text.format.DateUtils
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +15,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,9 +23,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drivereply.data.ReplyLogEntry
-import com.example.drivereply.theme.PrimaryDark
-import com.example.drivereply.theme.SecondaryDark
-import com.example.drivereply.theme.TertiaryDark
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,20 +30,10 @@ fun AnalyticsScreen(
     modifier: Modifier = Modifier,
     viewModel: AnalyticsViewModel = viewModel()
 ) {
-    val logs by viewModel.logs.collectAsStateWithLifecycle()
-    val weeklyData by viewModel.last7DaysReplies.collectAsStateWithLifecycle()
-    val appDist by viewModel.appDistribution.collectAsStateWithLifecycle()
-
-    val totalReplies = logs.size
-    val distractionFreeMinutes = totalReplies * 15 // 15 mins saved distraction per reply
-    val safetyScore = if (totalReplies == 0) 100 else {
-        (95 + (totalReplies * 0.2f)).coerceAtMost(100f).toInt()
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Analytics & Safety", fontWeight = FontWeight.Bold) },
+                title = { Text("Activity Stats", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
                 )
@@ -60,209 +41,157 @@ fun AnalyticsScreen(
         },
         modifier = modifier
     ) { paddingValues ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Safety Header Row (Circular score & short text)
-            item {
-                SafetyScoreHeaderCard(safetyScore = safetyScore, totalReplies = totalReplies)
-            }
+        AnalyticsPanel(
+            modifier = Modifier.padding(paddingValues),
+            viewModel = viewModel
+        )
+    }
+}
 
-            // Stat Cards Grid
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+@Composable
+fun AnalyticsPanel(
+    modifier: Modifier = Modifier,
+    viewModel: AnalyticsViewModel = viewModel()
+) {
+    val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val weeklyData by viewModel.last7DaysReplies.collectAsStateWithLifecycle()
+    val appDist by viewModel.appDistribution.collectAsStateWithLifecycle()
+
+    AnalyticsContent(
+        logs = logs,
+        weeklyData = weeklyData,
+        appDist = appDist,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun AnalyticsContent(
+    logs: List<ReplyLogEntry>,
+    weeklyData: List<Pair<String, Int>>,
+    appDist: Map<String, Int>,
+    modifier: Modifier = Modifier
+) {
+    val totalReplies = logs.size
+    val uniqueContacts = logs.map { it.contactName }.distinct().size
+
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                StatCard(
+                    title = "Total Replies",
+                    value = "$totalReplies",
+                    icon = "💬",
+                    modifier = Modifier.weight(1f)
+                )
+                StatCard(
+                    title = "Unique Contacts",
+                    value = "$uniqueContacts",
+                    icon = "👤",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        item {
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
                 ) {
-                    StatCard(
-                        title = "Saved Distractions",
-                        value = "$totalReplies",
-                        icon = "📱",
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = "Last 7 Days",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    StatCard(
-                        title = "Safe Focus Time",
-                        value = formatMinutes(distractionFreeMinutes),
-                        icon = "🛡️",
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = "Auto-replies sent over the last week",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-            }
 
-            // Spline Chart Card (Weekly Protection)
-            item {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp)
-                    ) {
-                        Text(
-                            text = "Weekly Protection History",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Auto-replies sent over the last 7 days",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        if (weeklyData.isNotEmpty()) {
-                            SplineChart(data = weeklyData)
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "No weekly records available",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Donut Chart Card (App Breakdown)
-            item {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp)
-                    ) {
-                        Text(
-                            text = "Platform Distribution",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Auto-reply volume by messaging application",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        if (totalReplies > 0) {
-                            DonutChart(distribution = appDist, totalCount = totalReplies)
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(180.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "No messaging logs available yet",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                    if (weeklyData.isNotEmpty()) {
+                        SplineChart(data = weeklyData)
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No weekly records available",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
             }
         }
-    }
-}
 
-@Composable
-fun SafetyScoreHeaderCard(safetyScore: Int, totalReplies: Int) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Circular progress safety score
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.size(90.dp)
+        item {
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                ),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Canvas(modifier = Modifier.size(90.dp)) {
-                    // Gray Track
-                    drawCircle(
-                        color = Color.LightGray.copy(alpha = 0.2f),
-                        style = Stroke(width = 8.dp.toPx())
-                    )
-                    // Active Arc
-                    drawArc(
-                        color = if (safetyScore >= 98) TertiaryDark else SecondaryDark,
-                        startAngle = -90f,
-                        sweepAngle = (safetyScore.toFloat() / 100f) * 360f,
-                        useCenter = false,
-                        style = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
-                    )
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
                     Text(
-                        text = "$safetyScore%",
+                        text = "Platform Distribution",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Score",
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        text = "Auto-reply volume by messaging application",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-            }
 
-            // Info column
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Distraction-Free Status",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                val descriptionText = if (totalReplies == 0) {
-                    "Your auto-replies will automatically shield you from phone interruptions when driving begins. Let's make our roads safer!"
-                } else {
-                    "Superb! You successfully avoided $totalReplies phone interruptions while keeping your eyes on the road. Safe travels!"
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    if (totalReplies > 0) {
+                        DonutChart(distribution = appDist, totalCount = totalReplies)
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No messaging logs available yet",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
-                Text(
-                    text = descriptionText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                    lineHeight = 16.sp
-                )
             }
         }
     }
@@ -553,15 +482,3 @@ data class DonutSegment(
     val sweepAngle: Float,
     val color: Color
 )
-
-fun formatMinutes(minutes: Int): String {
-    return when {
-        minutes == 0 -> "0m"
-        minutes < 60 -> "${minutes}m"
-        else -> {
-            val hours = minutes / 60
-            val remainingMinutes = minutes % 60
-            if (remainingMinutes == 0) "${hours}h" else "${hours}h ${remainingMinutes}m"
-        }
-    }
-}

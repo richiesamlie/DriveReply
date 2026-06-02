@@ -1,5 +1,6 @@
 package com.example.drivereply.ui.templates
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -34,6 +35,7 @@ fun EditTemplateScreen(
 
     var name by remember { mutableStateOf("") }
     var body by remember { mutableStateOf("") }
+    var showDiscardDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(templateId) {
         viewModel.loadTemplate(templateId)
@@ -53,12 +55,30 @@ fun EditTemplateScreen(
         }
     }
 
+    val originalName = template?.name ?: ""
+    val originalBody = template?.body ?: ""
+    val hasUnsavedChanges = if (templateId == null) {
+        name.isNotBlank() || body.isNotBlank()
+    } else {
+        name != originalName || body != originalBody
+    }
+
+    fun handleBack() {
+        if (hasUnsavedChanges) {
+            showDiscardDialog = true
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler { handleBack() }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(if (templateId == null) "Create Template" else "Edit Template", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = ::handleBack) {
                         Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -127,8 +147,40 @@ fun EditTemplateScreen(
 
             WhatsAppPreviewBubble(messageText = body.ifBlank { "[Auto-reply message preview]" })
 
+            Button(
+                onClick = { viewModel.saveTemplate(name, body, templateId) },
+                enabled = name.isNotBlank() && body.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Save Template")
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+
+    if (showDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiscardDialog = false },
+            title = { Text("Discard changes?") },
+            text = { Text("You have unsaved edits. Leave without saving?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDiscardDialog = false
+                        onBack()
+                    }
+                ) {
+                    Text("Discard", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDialog = false }) {
+                    Text("Keep Editing")
+                }
+            }
+        )
     }
 }
 
