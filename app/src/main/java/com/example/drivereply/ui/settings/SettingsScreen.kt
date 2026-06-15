@@ -272,6 +272,8 @@ fun SettingsScreen(
                 SettingsPane.UPDATES_ABOUT -> SettingsUpdatesAbout(
                     updateState = updateState,
                     onCheckUpdates = viewModel::checkForUpdates,
+                    onStartDownload = viewModel::startDownloadAndInstall,
+                    onCancelDownload = viewModel::cancelDownload,
                     onOpenLink = { url ->
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -654,6 +656,8 @@ private fun SettingsDebugging(
 private fun SettingsUpdatesAbout(
     updateState: UpdateCheckUiState,
     onCheckUpdates: () -> Unit,
+    onStartDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
     PaneHint("Check GitHub releases and view installed version details.")
@@ -662,19 +666,75 @@ private fun SettingsUpdatesAbout(
     updateState.message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall)
     }
+
+    // Primary action: in-app download + install.
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = onCheckUpdates, enabled = !updateState.isChecking, shape = RoundedCornerShape(12.dp)) {
+        Button(
+            onClick = onCheckUpdates,
+            enabled = !updateState.isChecking,
+            shape = RoundedCornerShape(12.dp)
+        ) {
             Text(if (updateState.isChecking) "Checking..." else "Check Updates")
         }
-        if (updateState.hasUpdate) {
-            val target = updateState.downloadUrl ?: updateState.releaseUrl
-            if (!target.isNullOrBlank()) {
-                OutlinedButton(onClick = { onOpenLink(target) }, shape = RoundedCornerShape(12.dp)) {
-                    Text(if (!updateState.downloadUrl.isNullOrBlank()) "Download APK" else "Open Release")
-                }
+        if (updateState.canStartDownload) {
+            Button(
+                onClick = onStartDownload,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Download & install")
             }
         }
     }
+
+    // In-flight progress UI.
+    if (updateState.isDownloading) {
+        val percent = updateState.downloadPercent.coerceIn(0, 100)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { percent / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Downloading update…",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "$percent%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onCancelDownload) { Text("Cancel") }
+        }
+    }
+
+    // Error message (signature mismatch, network, etc.)
+    updateState.downloadError?.let { err ->
+        Text(
+            err,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+
+    // Fallback: open the GitHub release page in a browser (works even when
+    // the user has not enabled "install unknown apps" for our app).
+    if (updateState.hasUpdate) {
+        val fallback = updateState.releaseUrl
+        if (!fallback.isNullOrBlank()) {
+            OutlinedButton(
+                onClick = { onOpenLink(fallback) },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Open release page")
+            }
+        }
+    }
+
     EntryCard("About", "DriveReply Auto-Assistant\nVersion ${updateState.installedTag}", Icons.Default.Info) { }
 }
 

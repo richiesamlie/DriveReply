@@ -37,7 +37,7 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                     DriveReplyService.clearRepliedContacts()
                     DebugEventLogger.log(TAG, "Detected IN_VEHICLE ENTER, driving mode enabled")
 
-                    updateServiceNotification(context, "Driving detected — auto-reply active 🚗")
+                    DriveReplyService.setNotificationText("Driving detected — auto-reply active 🚗")
                 }
 
                 ActivityTransition.ACTIVITY_TRANSITION_EXIT -> {
@@ -46,7 +46,7 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                     exitRunnable = Runnable {
                         DriveReplyService.setDrivingState(false)
                         DebugEventLogger.log(TAG, "Detected IN_VEHICLE EXIT debounce elapsed, driving mode disabled")
-                        updateServiceNotification(context, "Driving stopped — auto-reply paused")
+                        DriveReplyService.setNotificationText("Driving stopped — auto-reply paused")
                         exitRunnable = null
                     }
                     handler.postDelayed(exitRunnable!!, EXIT_DEBOUNCE_MS)
@@ -54,17 +54,5 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                 }
             }
         }
-    }
-
-    private fun updateServiceNotification(context: Context, text: String) {
-        // The service updates its own notification via the companion state;
-        // we trigger it indirectly by sending a broadcast or calling the service directly.
-        // Since DriveReplyService is a running foreground service, we can use a direct reference.
-        // For simplicity, we post an intent to the service.
-        val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
-            action = "UPDATE_NOTIFICATION"
-            putExtra("notification_text", text)
-        }
-        context.startService(serviceIntent)
     }
 }

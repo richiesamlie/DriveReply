@@ -64,22 +64,20 @@ class BluetoothReceiver : BroadcastReceiver() {
                             DriveReplyService.clearRepliedContacts()
                             DebugEventLogger.log(TAG, "Matched BT connected $deviceLabel, driving mode enabled")
 
-                            // Update persistent notification
-                            val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
-                                this.action = "UPDATE_NOTIFICATION"
-                                putExtra("notification_text", "Driving detected via Bluetooth connection: $deviceLabel")
-                            }
-                            context.startService(serviceIntent)
+                            // Update persistent notification via the service's
+                            // own state flow — no startService() from a
+                            // background context (Android 12+ restriction).
+                            DriveReplyService.setNotificationText(
+                                "Driving detected via Bluetooth connection: $deviceLabel"
+                            )
                         }
                         BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                             // End driving state
                             DriveReplyService.setDrivingState(false)
                             DebugEventLogger.log(TAG, "Matched BT disconnected $deviceLabel, driving mode disabled")
-                            val serviceIntent = Intent(context, DriveReplyService::class.java).apply {
-                                this.action = "UPDATE_NOTIFICATION"
-                                putExtra("notification_text", "Service active — waiting for driving detection")
-                            }
-                            context.startService(serviceIntent)
+                            DriveReplyService.setNotificationText(
+                                "Service active — waiting for driving detection"
+                            )
                         }
                     }
                 } else {

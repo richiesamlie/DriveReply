@@ -23,7 +23,7 @@ Built using **Kotlin**, **Jetpack Compose (Material 3)**, **Room Database**, **G
 - **Listener Recovery**: If notification access is granted but the listener is not bound, DriveReply automatically requests rebind and exposes a manual **Rebind Listener** action in Home.
 - **Manual Simulation Override**: Developer simulation mode is a hard override; auto triggers cannot force-stop it until you manually turn it off.
 - **In-App Debug Logs**: Built-in debug log viewer in Settings with enable/disable toggle, clear, and copy-to-clipboard flow for fast support triage.
-- **GitHub Release Updates**: Settings includes update check against GitHub Releases and provides a direct APK download/open-release link when a newer version is available.
+- **GitHub Release Updates (in-app)**: Settings → About has a *Check for updates* button that polls the latest GitHub release. When a newer build is available, *Download & install* streams the APK with a progress bar, verifies the signing certificate matches the currently installed app, and hands off to the system package installer — no browser, no manual file-shuffling. The GitHub release page is still offered as a fallback.
 
 ### 🎯 Deep Customization Rules
 - **Granular Custom Rules**: Define contact-specific message templates, active days of the week, and start/end time windows.
@@ -118,6 +118,9 @@ For developer-focused architectural deep dives, database schemas, service bindin
 
 For execution tracking and completed roadmap milestones, see:
 👉 **[Progress Log](docs/PROGRESS.md)**
+
+For the most recent security & quality audit, see:
+👉 **[Security Audit](docs/SECURITY_AUDIT.md)**
 
 ## License
 
