@@ -1,5 +1,8 @@
 package com.example.drivereply.util
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -13,7 +16,11 @@ import android.net.Uri
 import android.os.Build
 import android.util.Base64
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.example.drivereply.MainActivity
+import com.example.drivereply.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -26,25 +33,27 @@ import java.net.URL
 import java.security.MessageDigest
 
 /**
- * Streams an APK from a remote URL into the app cache, verifies its signing
- * certificate matches the currently installed app, and launches the system
- * package installer via a FileProvider URI.
+ * Streams an APK from a remote URL into the app cache, verifies it is a
+ * newer signed-by-us build, optionally posts a system progress
+ * notification, and launches the system package installer via a
+ * FileProvider URI.
  *
  * Public surface (intentionally small):
  *   - [downloadAndVerify]  : Flow<UpdateEvent> — emit progress, then
- *                            complete with the local APK file on success or
- *                            a typed error on failure.
- *   - [launchInstaller]    : Result<Unit> — fires the system install intent
- *                            for a previously-downloaded APK.
+ *                            complete with the local APK file on success
+ *                            or a typed [UpdateError] on failure.
+ *   - [launchInstaller]    : Result<Unit> — fires the system install
+ *                            intent for a previously-downloaded APK.
  *   - [cancel]             : void — aborts the in-flight download.
  *
- * Everything else is private or `internal` so tests can swap out the
- * transport and signature store.
+ * Everything else is `private` or `internal` so tests can swap out the
+ * transport, signature store, and notifier.
  */
 class ApkUpdateInstaller(
     private val context: Context,
     private val transport: UpdateTransport = HttpUrlConnectionTransport,
     private val signatureStore: SignatureStore = PackageManagerSignatureStore(context),
+    private val notifier: UpdateNotifier = SystemUpdateNotifier(context),
 ) {
 
     /** Where downloaded APKs live. Wiped on cache clear or app uninstall. */
@@ -55,8 +64,8 @@ class ApkUpdateInstaller(
     private var currentConnection: HttpURLConnection? = null
 
     /**
-     * Download [url] into the cache and verify it is signed by the same
-     * certificate that signed the currently installed app. Emits progress
+     * Download [url] into the cache and verify it is a newer build signed
+     * by the same certificate as the installed app. Emits progress
      * events for the UI to render.
      */
     fun downloadAndVerify(
@@ -67,12 +76,14 @@ class ApkUpdateInstaller(
         val targetFile = File(updatesDir, "DriveReply-$targetTag.apk")
         // Best-effort cleanup of previous attempts (only the same tag).
         if (targetFile.exists() && targetFile.length() == 0L) targetFile.delete()
+        notifier.onPreparing(channelId, targetTag)
         emit(UpdateEvent.Preparing(targetFile))
         val conn = transport.open(url)
         try {
             currentConnection = conn
             val responseCode = conn.responseCode
             if (responseCode !in 200..299) {
+                notifier.onFailed(channelId, targetTag, "HTTP $responseCode")
                 emit(UpdateEvent.Failed(UpdateError.HttpStatus(responseCode)))
                 return@flow
             }
@@ -91,6 +102,7 @@ class ApkUpdateInstaller(
                             val percent = ((written * 100L) / totalBytes).toInt()
                             if (percent != lastEmittedPercent) {
                                 lastEmittedPercent = percent
+                                notifier.onProgress(channelId, targetTag, percent)
                                 emit(UpdateEvent.Progress(percent, written, totalBytes))
                             }
                         }
@@ -99,20 +111,76 @@ class ApkUpdateInstaller(
                 }
             }
             emit(UpdateEvent.Verifying(targetFile))
-            val verification = signatureStore.verifyMatchesInstalledApp(targetFile)
-            if (verification !is SignatureMatchResult.Matches) {
-                if (!targetFile.delete()) {
-                    // leave it; cache clear will eventually reap it
+            notifier.onVerifying(channelId, targetTag)
+
+            // Gate #1: versionCode direction (downgrade / already-current).
+            val pm = context.packageManager
+            val apkInfo: PackageInfo = try {
+                pm.getPackageArchiveInfo(
+                    targetFile.absolutePath,
+                    PackageManager.GET_SIGNING_CERTIFICATES,
+                ) ?: throw IllegalStateException("PackageManager returned null for APK")
+            } catch (e: Exception) {
+                targetFile.delete()
+                notifier.onFailed(channelId, targetTag, "Could not parse APK manifest")
+                emit(UpdateEvent.Failed(UpdateError.Unknown("Could not parse APK manifest: ${e.message}")))
+                return@flow
+            }
+            val installedInfo = try {
+                pm.getPackageInfo(context.packageName, 0)
+            } catch (e: Exception) {
+                targetFile.delete()
+                notifier.onFailed(channelId, targetTag, "Could not read installed app info")
+                emit(UpdateEvent.Failed(UpdateError.Unknown("Could not read installed info: ${e.message}")))
+                return@flow
+            }
+            when (val versionCheck = compareVersionCodes(
+                downloaded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    apkInfo.longVersionCode.toInt()
+                } else {
+                    @Suppress("DEPRECATION") apkInfo.versionCode
+                },
+                installed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    installedInfo.longVersionCode.toInt()
+                } else {
+                    @Suppress("DEPRECATION") installedInfo.versionCode
+                },
+            )) {
+                VersionCheckResult.Newer -> { /* proceed to signature check */ }
+                VersionCheckResult.AlreadyCurrent -> {
+                    targetFile.delete()
+                    notifier.onFailed(channelId, targetTag, "Already up to date")
+                    emit(UpdateEvent.Failed(UpdateError.AlreadyCurrent))
+                    return@flow
                 }
+                is VersionCheckResult.Downgrade -> {
+                    targetFile.delete()
+                    notifier.onFailed(channelId, targetTag, "Refusing downgrade")
+                    emit(UpdateEvent.Failed(
+                        UpdateError.Downgrade(versionCheck.downloaded, versionCheck.installed)
+                    ))
+                    return@flow
+                }
+            }
+
+            // Gate #2: signing certificate must match the installed app.
+            val verification = signatureStore.verifyMatchesInstalledApp(targetFile, apkInfo)
+            if (verification !is SignatureMatchResult.Matches) {
+                targetFile.delete()
+                notifier.onFailed(channelId, targetTag, "Signature mismatch")
                 emit(UpdateEvent.Failed(UpdateError.SignatureMismatch(verification.javaClass.simpleName)))
                 return@flow
             }
+            notifier.onReady(channelId, targetTag, verification.certificateSha256)
             emit(UpdateEvent.Ready(targetFile, verification.certificateSha256))
         } catch (e: IOException) {
+            notifier.onFailed(channelId, targetTag, e.message ?: "I/O error")
             emit(UpdateEvent.Failed(UpdateError.Io(e.message ?: "I/O error")))
         } catch (e: SecurityException) {
+            notifier.onFailed(channelId, targetTag, e.message ?: "Permission denied")
             emit(UpdateEvent.Failed(UpdateError.PermissionDenied(e.message ?: "Permission denied")))
         } catch (e: Exception) {
+            notifier.onFailed(channelId, targetTag, e.message ?: "Unknown error")
             emit(UpdateEvent.Failed(UpdateError.Unknown(e.message ?: "Unknown error")))
         } finally {
             currentConnection = null
@@ -136,11 +204,15 @@ class ApkUpdateInstaller(
                 "FileProvider misconfigured: ${e.message}", e
             ))
         }
+        // ACTION_INSTALL_PACKAGE is marked deprecated since API 28 but
+        // remains the only public contract for sideloading an APK
+        // (PackageInstaller requires the system INSTALL_PACKAGES
+        // permission, which third-party apps cannot hold).
+        @Suppress("DEPRECATION")
         val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra(Intent.EXTRA_RETURN_RESULT, true)
         }
         return try {
             context.startActivity(intent)
@@ -153,6 +225,25 @@ class ApkUpdateInstaller(
     fun cancel() {
         currentConnection?.disconnect()
         currentConnection = null
+    }
+
+    // ---------------------------------------------------------------------
+    //  Version check (pure, testable)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Compare the versionCode of a downloaded APK against the installed
+     * one. Used internally by [downloadAndVerify] before the signature
+     * check runs, so a downgrade or "already current" build is rejected
+     * without surfacing an install dialog the OS would also block.
+     *
+     * Exposed as a static so the pure logic is unit-testable without
+     * an Android Context or any platform dependency.
+     */
+    sealed interface VersionCheckResult {
+        data object Newer : VersionCheckResult
+        data object AlreadyCurrent : VersionCheckResult
+        data class Downgrade(val downloaded: Int, val installed: Int) : VersionCheckResult
     }
 
     // ---------------------------------------------------------------------
@@ -173,6 +264,10 @@ class ApkUpdateInstaller(
         data class PermissionDenied(override val message: String) : UpdateError(message)
         data class SignatureMismatch(val verifier: String) :
             UpdateError("Signing certificate mismatch (verifier=$verifier)")
+        data class Downgrade(val downloaded: Int, val installed: Int) :
+            UpdateError("Refusing to install older build: downloaded=$downloaded, installed=$installed")
+        data object AlreadyCurrent :
+            UpdateError("Downloaded build has the same versionCode as the installed app")
         data class Unknown(override val message: String) : UpdateError(message)
     }
 
@@ -212,8 +307,15 @@ class ApkUpdateInstaller(
         data class Error(val message: String) : SignatureMatchResult
     }
 
+    /**
+     * Compares a downloaded APK to the installed app. The [apkInfo] is
+     * pre-parsed by the caller (avoids re-reading the same archive).
+     */
     fun interface SignatureStore {
-        fun verifyMatchesInstalledApp(apk: File): SignatureMatchResult
+        fun verifyMatchesInstalledApp(
+            apk: File,
+            apkInfo: PackageInfo,
+        ): SignatureMatchResult
     }
 
     /**
@@ -222,13 +324,12 @@ class ApkUpdateInstaller(
      * always available.
      */
     class PackageManagerSignatureStore(private val context: Context) : SignatureStore {
-        override fun verifyMatchesInstalledApp(apk: File): SignatureMatchResult {
+        override fun verifyMatchesInstalledApp(
+            apk: File,
+            apkInfo: PackageInfo,
+        ): SignatureMatchResult {
             val pm = context.packageManager
             return try {
-                val apkInfo: PackageInfo = pm.getPackageArchiveInfo(
-                    apk.absolutePath,
-                    PackageManager.GET_SIGNING_CERTIFICATES,
-                ) ?: return SignatureMatchResult.Error("PackageManager returned null for APK")
                 val apkSigners = apkInfo.signingInfo
                     ?.takeIf { it.hasMultipleSigners() || it.hasPastSigningCertificates() }
                     ?.signingCertificateHistory
@@ -268,8 +369,143 @@ class ApkUpdateInstaller(
         }
     }
 
+    /**
+     * Pluggable notifier. The default [SystemUpdateNotifier] posts a real
+     * Notification; tests can pass a no-op or a recording implementation.
+     */
+    interface UpdateNotifier {
+        fun onPreparing(channelId: String, targetTag: String)
+        fun onProgress(channelId: String, targetTag: String, percent: Int)
+        fun onVerifying(channelId: String, targetTag: String)
+        fun onReady(channelId: String, targetTag: String, certificateSha256: String)
+        fun onFailed(channelId: String, targetTag: String, reason: String)
+    }
+
+    /**
+     * Real notifier. Posts a single notification under
+     * [DEFAULT_NOTIFICATION_ID], updates it on each progress event, and
+     * dismisses it on Ready or Failed. The notification tap deep-links to
+     * MainActivity, which is responsible for navigating the user into
+     * Settings → Updates if appropriate.
+     *
+     * If the app has not been granted `POST_NOTIFICATIONS` (API 33+),
+     * `NotificationManagerCompat.notify` is a silent no-op — the in-app
+     * progress UI remains the source of truth.
+     */
+    class SystemUpdateNotifier(private val context: Context) : UpdateNotifier {
+        private val manager: NotificationManagerCompat =
+            NotificationManagerCompat.from(context)
+
+        @SuppressLint("MissingPermission")
+        private fun post(n: Notification) {
+            manager.notify(DEFAULT_NOTIFICATION_ID, n)
+        }
+
+        @SuppressLint("MissingPermission")
+        private fun canPost(): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+            return ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        override fun onPreparing(channelId: String, targetTag: String) {
+            ensureChannel(channelId)
+            if (!canPost()) return
+            val n = baseBuilder(channelId, targetTag)
+                .setContentText(context.getString(R.string.updates_install_in_progress))
+                .setProgress(100, 0, true)
+                .build()
+            post(n)
+        }
+
+        override fun onProgress(channelId: String, targetTag: String, percent: Int) {
+            if (!canPost()) return
+            val n = baseBuilder(channelId, targetTag)
+                .setContentText(context.getString(R.string.updates_install_in_progress))
+                .setProgress(100, percent.coerceIn(0, 100), false)
+                .build()
+            post(n)
+        }
+
+        override fun onVerifying(channelId: String, targetTag: String) {
+            if (!canPost()) return
+            val n = baseBuilder(channelId, targetTag)
+                .setContentText(context.getString(R.string.updates_install_pending_signature))
+                .setProgress(100, 100, true)
+                .build()
+            post(n)
+        }
+
+        override fun onReady(channelId: String, targetTag: String, certificateSha256: String) {
+            // The system install dialog takes over from here; dismiss ours
+            // so we don't leave an ongoing notification pinned.
+            manager.cancel(DEFAULT_NOTIFICATION_ID)
+        }
+
+        override fun onFailed(channelId: String, targetTag: String, reason: String) {
+            // Errors are surfaced in-app; dismiss the progress notification
+            // so the user is not left looking at a 0% bar.
+            manager.cancel(DEFAULT_NOTIFICATION_ID)
+        }
+
+        private fun baseBuilder(channelId: String, targetTag: String): NotificationCompat.Builder {
+            val title = context.getString(R.string.updates_notification_title, targetTag)
+            val contentIntent = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(EXTRA_OPEN_UPDATES, true)
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            return NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle(title)
+                .setContentIntent(contentIntent)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+        }
+
+        private fun ensureChannel(channelId: String) {
+            // NotificationChannel is API 26+; minSdk is 29 so always available.
+            val channel = NotificationChannel(
+                channelId,
+                context.getString(R.string.updates_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = context.getString(R.string.updates_channel_description)
+                setShowBadge(false)
+            }
+            manager.createNotificationChannel(channel)
+        }
+    }
+
     companion object {
         const val DEFAULT_CHANNEL_ID = "drive_reply_updates"
+        const val DEFAULT_NOTIFICATION_ID = 4701
+        const val EXTRA_OPEN_UPDATES = "com.example.drivereply.extra.OPEN_UPDATES"
+
+        /**
+         * Compare the versionCode of a downloaded APK against the
+         * installed one. Used internally by [downloadAndVerify] before
+         * the signature check runs, so a downgrade or "already current"
+         * build is rejected without surfacing an install dialog the OS
+         * would also block.
+         *
+         * Exposed as a static so the pure logic is unit-testable without
+         * an Android Context or any platform dependency.
+         */
+        internal fun compareVersionCodes(downloaded: Int, installed: Int): VersionCheckResult =
+            when {
+                downloaded < installed ->
+                    VersionCheckResult.Downgrade(downloaded = downloaded, installed = installed)
+                downloaded == installed -> VersionCheckResult.AlreadyCurrent
+                else -> VersionCheckResult.Newer
+            }
 
         /**
          * Base64-NOPAD SHA-256 of a Signature's bytes. Exposed for the
@@ -282,22 +518,3 @@ class ApkUpdateInstaller(
         }
     }
 }
-
-/**
- * Convenience: build the persistent notification shown while an update
- * downloads. Returns null on API < 26 (we don't pre-Oreo users; minSdk 29).
- */
-fun NotificationCompat.Builder.updateProgress(
-    percent: Int,
-    contentTitle: String,
-    contentText: String,
-    smallIcon: Int = android.R.drawable.stat_sys_download,
-): NotificationCompat.Builder = this
-    .setSmallIcon(smallIcon)
-    .setContentTitle(contentTitle)
-    .setContentText(contentText)
-    .setOngoing(true)
-    .setOnlyAlertOnce(true)
-    .setProgress(100, percent.coerceIn(0, 100), percent == 0)
-    .setPriority(NotificationCompat.PRIORITY_LOW)
-    .setCategory(NotificationCompat.CATEGORY_PROGRESS)

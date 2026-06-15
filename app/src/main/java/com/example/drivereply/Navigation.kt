@@ -40,7 +40,7 @@ enum class Tab {
 }
 
 @Composable
-fun MainNavigation() {
+fun MainNavigation(openUpdates: Boolean = false) {
     val context = LocalContext.current
     val app = remember(context) { context.applicationContext as DriveReplyApplication }
     var hasCompletedOnboarding by remember { mutableStateOf<Boolean?>(null) }
@@ -60,7 +60,14 @@ fun MainNavigation() {
         return
     }
 
-    val startDestination: NavKey = if (onboardingState) Main else Onboarding
+    // When the user taps the in-app update progress notification, deep-link
+    // straight into Settings. We still respect the onboarding gate so a
+    // first-launch user sees onboarding first.
+    val startDestination: NavKey = when {
+        !onboardingState -> Onboarding
+        openUpdates -> Settings
+        else -> Main
+    }
 
     key(startDestination) {
         val backStack = rememberNavBackStack(startDestination)

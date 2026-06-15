@@ -1,6 +1,8 @@
 package com.example.drivereply.util
 
 import com.example.drivereply.util.ApkUpdateInstaller.SignatureMatchResult
+import com.example.drivereply.util.ApkUpdateInstaller.UpdateError
+import com.example.drivereply.util.ApkUpdateInstaller.VersionCheckResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -77,6 +79,64 @@ class ApkUpdateInstallerTest {
     fun sha256OfBytes_producesAscii() {
         val out = sha256Base64("anything".toByteArray())
         assertTrue("output should be base64: $out", out.all { it.isLetterOrDigit() || it == '+' || it == '/' })
+    }
+
+    // ------------------------------------------------------------------
+    //  compareVersionCodes (pure, internal) — version direction gate.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun versionCheck_newerBuild_returnsNewer() {
+        val r = ApkUpdateInstaller.compareVersionCodes(downloaded = 42, installed = 41)
+        assertEquals(VersionCheckResult.Newer, r)
+    }
+
+    @Test
+    fun versionCheck_equalBuilds_returnsAlreadyCurrent() {
+        val r = ApkUpdateInstaller.compareVersionCodes(downloaded = 1, installed = 1)
+        assertEquals(VersionCheckResult.AlreadyCurrent, r)
+    }
+
+    @Test
+    fun versionCheck_olderBuild_returnsDowngradeWithPayload() {
+        val r = ApkUpdateInstaller.compareVersionCodes(downloaded = 5, installed = 10)
+        assertEquals(VersionCheckResult.Downgrade(downloaded = 5, installed = 10), r)
+    }
+
+    @Test
+    fun versionCheck_firstInstall_returnsNewer() {
+        val r = ApkUpdateInstaller.compareVersionCodes(downloaded = 1, installed = 0)
+        assertEquals(VersionCheckResult.Newer, r)
+    }
+
+    // ------------------------------------------------------------------
+    //  UpdateError variants (constructed only — no behavior to assert
+    //  beyond type identity).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun updateError_signatureMismatch_carriesVerifierName() {
+        val e = UpdateError.SignatureMismatch("PackageManagerSignatureStore")
+        assertTrue(e.message.contains("PackageManagerSignatureStore"))
+    }
+
+    @Test
+    fun updateError_downgrade_carriesBothCodes() {
+        val e = UpdateError.Downgrade(downloaded = 5, installed = 10)
+        assertTrue("expected both versionCodes in message: ${e.message}",
+            e.message.contains("5") && e.message.contains("10"))
+    }
+
+    @Test
+    fun updateError_alreadyCurrent_hasDescriptiveMessage() {
+        val e: UpdateError = UpdateError.AlreadyCurrent
+        assertTrue(e.message.contains("versionCode"))
+    }
+
+    @Test
+    fun updateError_httpStatus_includesCodeInMessage() {
+        val e = UpdateError.HttpStatus(404)
+        assertTrue(e.message.contains("404"))
     }
 
     // ------------------------------------------------------------------

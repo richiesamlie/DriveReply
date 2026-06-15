@@ -3,6 +3,7 @@ package com.example.drivereply.service
 import android.app.Notification
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.example.drivereply.DriveReplyApplication
@@ -84,7 +85,14 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         DebugEventLogger.log(TAG, "Notif received package=$packageName, contact=$contactName, key=${sbn.key}")
 
         serviceScope.launch {
-            val selfDisplayName = extras.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)
+            // EXTRA_SELF_DISPLAY_NAME is deprecated in API 31, but the
+            // platform never introduced a public replacement helper; the
+            // field is still read by the system to identify messages the
+            // user sent to themselves. Suppress the deprecation so we
+            // keep the working behavior until the platform provides a
+            // proper API.
+            val selfDisplayName = @Suppress("DEPRECATION") extras
+                .getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)
                 ?.toString()
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
@@ -308,12 +316,18 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
+            val parcelables: Array<Parcelable>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
+            } else {
+                @Suppress("DEPRECATION")
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-            )
+            }
+            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
             val sender = messages.asReversed().mapNotNull { message ->
+                // senderPerson is the modern (API 28+) source; the
+                // deprecated CharSequence `sender` is intentionally not
+                // used as a fallback anymore.
                 message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
-                    ?: message.sender?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             }.firstOrNull()
             if (!sender.isNullOrEmpty()) return sender
         }
@@ -329,12 +343,15 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             ?.takeIf { it.isNotEmpty() }
 
         val latestMessageSender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
+            val parcelables: Array<Parcelable>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
+            } else {
+                @Suppress("DEPRECATION")
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-            )
+            }
+            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
             messages.asReversed().mapNotNull { message ->
                 message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
-                    ?: message.sender?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             }.firstOrNull()
         } else {
             null
