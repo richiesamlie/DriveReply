@@ -199,9 +199,48 @@ DriveReply includes an internal debug log stream (`DebugEventLogger`) to simplif
 - This avoids mandatory ADB/logcat usage for most troubleshooting.
 
 ### C. GitHub Release Versioning & Update Checks
-DriveReply now aligns application metadata and release tags:
+DriveReply aligns application metadata and release tags:
 - CI generates release tags as `v1.0.<run_number>`.
 - APK metadata is set at build time with:
   - `versionName = 1.0.<run_number>`
   - `versionCode = <run_number>`
-- Settings provides update checks against GitHub Releases API (`/releases/latest`) and offers direct APK download links when newer releases exist.
+- Settings provides an in-app update flow that downloads the latest
+  APK from the GitHub release, verifies the signing certificate,
+  and hands off to the system package installer.
+
+#### Update Pipeline
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant S as Settings (Compose)
+    participant V as SettingsViewModel
+    participant I as ApkUpdateInstaller
+    participant G as GitHub Releases API
+    participant P as PackageManager
+    participant SI as System Installer
+
+    U->>S: Tap "Check for updates"
+    S->>V: checkForUpdates()
+    V->>G: GET /repos/.../releases/latest
+    G-->>V: JSON {tag_name, assets[]}
+    V->>S: render UpdateCheckUiState
+    U->>S: Tap "Download & install"
+    S->>V: startDownloadAndInstall()
+    V->>I: downloadAndVerify(url, tag)
+    I->>I: stream APK to cacheDir/updates/
+    I-->>V: Progress(percent)
+    I->>P: getPackageArchiveInfo(GET_SIGNING_CERTIFICATES)
+    P-->>I: APK signing certificates
+    I->>P: getPackageInfo(self, GET_SIGNING_CERTIFICATES)
+    P-->>I: installed signing certificates
+    alt signatures match
+        I-->>V: Ready(file, certSha256)
+        V->>I: launchInstaller(file)
+        I->>SI: ACTION_INSTALL_PACKAGE (FileProvider URI)
+        SI-->>U: native install confirmation
+    else mismatch
+        I-->>V: Failed(SignatureMismatch)
+        V->>S: render error
+    end
+```
