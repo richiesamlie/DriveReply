@@ -8,58 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Branded adaptive launcher icon** — replaces the default Android Studio
-  green-robot-on-green-grid placeholder. Electric-cyan chat bubble
-  containing a white steering wheel, on a deep-navy radial gradient.
-  Vector drawables for the adaptive icon (`drawable/ic_launcher_*`) plus
-  legacy PNGs at all 5 densities generated from
-  `tools/generate_launcher_icons.py`. Themed-icon support via
-  `<monochrome>` for Android 13+.
-- **Seamless in-app update flow** — `util/ApkUpdateInstaller.kt` streams
-  the release APK into `cacheDir/updates/`, verifies the signing
-  certificate matches the installed app, and launches the system
-  package installer via a `FileProvider` URI. The user sees a
-  linear progress bar in Settings, then a single native install
-  confirmation dialog. No more leaving the app to a browser.
-- **CI quality gates** — new `.github/workflows/ci.yml` (PR + develop
-  branch) runs `lintDebug + testDebugUnitTest + assembleDebug` and
-  uploads the debug APK as an artifact. `release.yml` is split into a
-  `quality-gate` job and a `build-and-release` job.
-- **Release integrity** — each release now ships a `SHA256SUMS.txt`
-  manifest alongside the APKs, plus the Gradle dependency graph
-  (SBOM) is published to the GitHub Dependency Graph.
-- **Signing-key enforcement on main** — a `main`-branch push without
-  `SIGNING_KEYSTORE` configured fails the release job with a clear
-  error rather than silently shipping an unsigned APK.
-
-### Changed
-- **Backup scope** — `res/xml/backup_rules.xml` and
-  `res/xml/data_extraction_rules.xml` now explicitly exclude the Room
-  database (templates, rules, reply log) and DataStore preferences
-  from cloud backup. Device-to-device transfer still keeps the user's
-  data so they don't lose it on a phone migration.
-- **Foreground-service notification updates** — `BluetoothReceiver`
-  and `ActivityTransitionReceiver` no longer call
-  `context.startService()` from a background context (a latent
-  Android 12+ restriction). They update a `StateFlow<String>` on
-  `DriveReplyService` instead; the service collects the flow and
-  republishes to the OS notification.
-- **`GitHubReleaseChecker.shouldSuppressLegacyFalsePositive` is now
-  `internal`** so the unit test can exercise it directly.
+- **In-app update progress notification** — when the user starts a
+  download, a sticky `Notification` with a progress bar appears in the
+  shade. The notification updates on every progress event, switches to
+  a "Verifying signature…" indeterminate state, and dismisses itself
+  when the system install dialog takes over. Tapping the notification
+  deep-links to MainActivity → Settings, even if the activity is
+  already in the back stack. Implementation in
+  `ApkUpdateInstaller.SystemUpdateNotifier`; the notifier is pluggable
+  via the new `UpdateNotifier` interface so tests don't need a real
+  `NotificationManager`.
+- **Version-direction gate in the in-app updater** — `ApkUpdateInstaller`
+  now reads the `versionCode` of the downloaded APK and refuses to
+  install a build that is older (`UpdateError.Downgrade`) or equal
+  (`UpdateError.AlreadyCurrent`) to the installed app. Surface these
+  in Settings as typed errors instead of letting the system install
+  dialog fail with a generic "App not installed" toast.
+- **Unit tests** for the version gate and the new `UpdateError`
+  variants: 8 new tests in `ApkUpdateInstallerTest`.
 
 ### Fixed
-- `BluetoothReceiver` and `ActivityTransitionReceiver` no longer
-  build an `ACTION_UPDATE_NOTIFICATION` Intent just to change the
-  foreground-service notification text. Replaced with
-  `DriveReplyService.setNotificationText(...)`.
-
-### Security
-- **In-app update refuses to install an APK whose signing
-  certificate does not match the currently installed app.** A
-  mismatched APK is deleted from cache and a typed error is
-  surfaced in Settings instead.
-- Room DB, DataStore preferences, and downloaded APKs are excluded
-  from cloud backup (S-01).
+- **`BluetoothReceiver`** — `Intent.getParcelableExtra(name)` (deprecated
+  on API 33+) now uses the typed overload on Tiramisu+.
+- **`WhatsAppNotificationListener`** — `Bundle.getParcelableArray(name)`
+  (deprecated on API 33+) now uses the typed overload on Tiramisu+.
+  Dropped the legacy `Notification.MessagingStyle.Message.sender`
+  (CharSequence) fallback in favor of `senderPerson?.name` (API 28+).
+  `EXTRA_SELF_DISPLAY_NAME` is now explicitly suppressed with a
+  comment explaining there is no public replacement helper on the
+  platform.
+- **`ApkUpdateInstaller`** — `Intent.ACTION_INSTALL_PACKAGE` is the
+  only public contract for sideloading an APK; the deprecation is
+  suppressed with an explanatory comment so the build is clean.
+- **In-app update notification permission** — the system notification
+  is now gated on an explicit `POST_NOTIFICATIONS` check on API 33+,
+  so the app does not throw `SecurityException` when the user has
+  denied the permission. In-app UI is unchanged and remains the
+  source of truth for download progress.
 
 ### Notes
 - `DebugEventLogger` already has a `MAX_ENTRIES = 500` cap and

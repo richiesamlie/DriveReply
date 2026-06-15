@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.service.DriveReplyService
 import com.example.drivereply.util.DebugEventLogger
@@ -20,7 +21,15 @@ class BluetoothReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
+        // getParcelableExtra(String) is deprecated on API 33+; the typed
+        // overload preserves the type argument while satisfying the
+        // new platform contract.
+        val device: BluetoothDevice = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+        } ?: return
 
         val app = context.applicationContext as DriveReplyApplication
         val prefs = app.preferencesManager
