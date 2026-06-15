@@ -14,11 +14,10 @@ on:
 permissions:
   contents: write
 
-# Refuse to run if a keystore isn't configured for a main-branch push.
-# This prevents unsigned APKs from being shipped under the "release" tag.
-env:
-  SIGNING_KEYSTORE_REQUIRED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
+# (SIGNING_KEYSTORE_REQUIRED is computed inside the build job, because the
+# env context in `if:` does not see step-level secrets and we need the
+# value alongside the secret itself. The two relevant inputs are
+# github.event_name and github.ref.)
 jobs:
   quality-gate:
     name: Lint + Test + Assemble
@@ -70,18 +69,21 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
-      - name: Decode Keystore
+      - name: Decode Keystore or Fail on Main
         env:
           SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
-        if: ${{ env.SIGNING_KEYSTORE != '' }}
+          SIGNING_KEYSTORE_REQUIRED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
-          echo "$SIGNING_KEYSTORE" | base64 --decode > release-key.jks
-
-      - name: Verify Keystore Present (Main Branch)
-        if: env.SIGNING_KEYSTORE_REQUIRED == 'true' && env.SIGNING_KEYSTORE == ''
-        run: |
-          echo "::error::RELEASE builds on main require a SIGNING_KEYSTORE secret. Refusing to ship an unsigned APK." >&2
-          exit 1
+          set -euo pipefail
+          if [ -n "$SIGNING_KEYSTORE" ]; then
+            echo "$SIGNING_KEYSTORE" | base64 --decode > release-key.jks
+            echo "::notice::Decoded signing keystore to release-key.jks ($(wc -c < release-key.jks) bytes)"
+          elif [ "$SIGNING_KEYSTORE_REQUIRED" = "true" ]; then
+            echo "::error::RELEASE builds on main require a SIGNING_KEYSTORE secret. Refusing to ship an unsigned APK." >&2
+            exit 1
+          else
+            echo "::warning::SIGNING_KEYSTORE secret is not set. Building unsigned release APK (acceptable for PR / workflow_dispatch runs; main-branch pushes will be blocked)."
+          fi
 
       - name: Build Debug and Release APKs
         run: ./gradlew assembleDebug assembleRelease
