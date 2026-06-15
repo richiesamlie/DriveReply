@@ -1,13 +1,32 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Auto-backup rules for DriveReply (API < 31).
+
+  Sensitive content (Room DB, DataStore preferences) is excluded from
+  cloud + device-to-device backups to avoid leaking reply templates and
+  the user's reply history to Google Drive or to another device they
+  may not own.
+
+  Note: <domain="cache"> is not a valid backup-rules domain, and the
+  app's cache is excluded by default anyway. The in-app updater's
+  downloaded APKs therefore need no explicit rule.
+
+  See https://developer.android.com/guide/topics/data/autobackup
 -->
 <full-backup-content>
     <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+      Exclude the Room database (templates, template rules, reply log)
+      from auto-backup. These contain user-authored content that can be
+      sensitive.
+    -->
+    <exclude domain="database" path="drivereply.db" />
+    <exclude domain="database" path="drivereply.db-shm" />
+    <exclude domain="database" path="drivereply.db-wal" />
+
+    <!--
+      Exclude DataStore preferences. Includes the user-selected car
+      Bluetooth MAC addresses, service enable toggle, and debug-log
+      preference.
+    -->
+    <exclude domain="file" path="datastore/" />
 </full-backup-content>

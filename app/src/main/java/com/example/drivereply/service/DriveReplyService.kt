@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 class DriveReplyService : Service() {
@@ -57,6 +58,24 @@ class DriveReplyService : Service() {
         @Volatile
         private var _lastStartRequestedAtMs: Long = 0L
         val lastStartRequestedAtMs: Long get() = _lastStartRequestedAtMs
+
+        /**
+         * Notification body shown on the persistent foreground-service
+         * notification. Receivers and the service itself can update this
+         * through [setNotificationText]; the service collects the flow and
+         * republishes to the OS without anyone calling startService().
+         */
+        private val _notificationText = MutableStateFlow(
+            "Service active — waiting for driving detection"
+        )
+        val notificationText: StateFlow<String> = _notificationText.asStateFlow()
+
+        fun setNotificationText(text: String) {
+            if (_notificationText.value != text) {
+                _notificationText.value = text
+                DebugEventLogger.log(TAG, "Notification text set: $text")
+            }
+        }
 
         private val _repliedContacts: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -133,7 +152,16 @@ class DriveReplyService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification("Service active — waiting for driving detection"))
         registerActivityTransitions()
         startListenerHealthWatchdog()
-        
+
+        // Bridge the static notification-text state flow into the OS notification.
+        // This lets receivers update the notification body without calling
+        // startService() from a background context (which Android 12+ restricts).
+        serviceScope.launch {
+            notificationText.collect { text ->
+                updateNotification(text)
+            }
+        }
+
         // Listen to speed activation threshold settings from DataStore
         val app = application as DriveReplyApplication
         app.preferencesManager.speedActivationThreshold
@@ -253,13 +281,13 @@ class DriveReplyService : Service() {
         if (fusedLocationClient == null) {
             fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         }
-        
+
         stopLocationSpeedTracking()
-        
+
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000L) // 10 seconds
             .setMinUpdateIntervalMillis(5000L)
             .build()
-            
+
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
                 val location = locationResult.lastLocation ?: return
@@ -268,12 +296,12 @@ class DriveReplyService : Service() {
                     if (speedKmH >= currentThreshold) {
                         speedExitRunnable?.let { speedHandler.removeCallbacks(it) }
                         speedExitRunnable = null
-                        
+
                         if (!_isDriving.value) {
                             setDrivingState(true)
                             clearRepliedContacts()
                         }
-                        updateNotification(String.format("Driving detected via Speed: %.1f km/h 🚗", speedKmH))
+                        setNotificationText(String.format("Driving detected via Speed: %.1f km/h 🚗", speedKmH))
                     } else {
                         if (_isDriving.value && speedExitRunnable == null) {
                             DebugEventLogger.log(
@@ -282,7 +310,7 @@ class DriveReplyService : Service() {
                             )
                             speedExitRunnable = Runnable {
                                 setDrivingState(false)
-                                updateNotification("Service active — waiting for driving detection")
+                                setNotificationText("Service active — waiting for driving detection")
                                 speedExitRunnable = null
                             }
                             speedHandler.postDelayed(speedExitRunnable!!, 2 * 60 * 1000L) // 2 minutes debounce
@@ -291,7 +319,7 @@ class DriveReplyService : Service() {
                 }
             }
         }
-        
+
         try {
             fusedLocationClient?.requestLocationUpdates(locationRequest, locationCallback!!, Looper.getMainLooper())
         } catch (_: SecurityException) {
