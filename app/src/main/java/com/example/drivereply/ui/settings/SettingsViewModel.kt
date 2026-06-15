@@ -10,9 +10,11 @@ import com.example.drivereply.DriveReplyApplication
 import com.example.drivereply.service.SupportedMessagingPackages
 import com.example.drivereply.service.WhatsAppNotificationListener
 import com.example.drivereply.service.DriveReplyService
+import com.example.drivereply.util.ApkUpdateInstaller
 import com.example.drivereply.util.DebugEventLogger
 import com.example.drivereply.util.GitHubReleaseChecker
 import com.example.drivereply.util.PermissionHelper
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -32,8 +35,17 @@ data class UpdateCheckUiState(
     val hasUpdate: Boolean = false,
     val downloadUrl: String? = null,
     val releaseUrl: String? = null,
-    val message: String? = null
-)
+    val message: String? = null,
+    // In-app update flow (Phase 2).
+    val isDownloading: Boolean = false,
+    val downloadPercent: Int = 0,
+    val downloadedApk: java.io.File? = null,
+    val downloadError: String? = null,
+    val certificateSha256: String? = null,
+) {
+    val canStartDownload: Boolean
+        get() = hasUpdate && !isDownloading && !downloadUrl.isNullOrBlank() && downloadedApk == null
+}
 
 data class SettingsSupportedAppDetection(
     val label: String,
@@ -57,6 +69,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val app = application as DriveReplyApplication
     private val preferencesManager = app.preferencesManager
+    private val apkInstaller = ApkUpdateInstaller(app)
+    private var downloadJob: Job? = null
     private val _updateCheckState = MutableStateFlow(
         UpdateCheckUiState(
             installedTag = computeInstalledGitHubStyleTag()
@@ -199,7 +213,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         val installedTag = _updateCheckState.value.installedTag
         _updateCheckState.value = _updateCheckState.value.copy(
             isChecking = true,
-            message = null
+            message = null,
+            downloadError = null,
+            downloadedApk = null,
+            downloadPercent = 0,
         )
 
         viewModelScope.launch {
@@ -227,6 +244,79 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 }
             )
         }
+    }
+
+    /**
+     * Start (or cancel + restart) the in-app download. The download streams
+     * into the app cache, verifies the signing certificate, and on success
+     * auto-launches the system package installer.
+     *
+     * The UI subscribes to [updateCheckState] for progress and the ready
+     * event.
+     */
+    fun startDownloadAndInstall() {
+        val url = _updateCheckState.value.downloadUrl ?: return
+        val tag = _updateCheckState.value.latestTag ?: "latest"
+        downloadJob?.cancel()
+        downloadJob = viewModelScope.launch {
+            _updateCheckState.value = _updateCheckState.value.copy(
+                isDownloading = true,
+                downloadPercent = 0,
+                downloadError = null,
+                downloadedApk = null,
+                certificateSha256 = null,
+            )
+            apkInstaller.downloadAndVerify(url = url, targetTag = tag).collect { event ->
+                when (event) {
+                    is ApkUpdateInstaller.UpdateEvent.Preparing -> {
+                        DebugEventLogger.log("Updates", "Preparing download to ${event.target.name}")
+                    }
+                    is ApkUpdateInstaller.UpdateEvent.Progress -> {
+                        _updateCheckState.value = _updateCheckState.value.copy(
+                            downloadPercent = event.percent
+                        )
+                    }
+                    is ApkUpdateInstaller.UpdateEvent.Verifying -> {
+                        DebugEventLogger.log("Updates", "Verifying signature of ${event.target.name}")
+                    }
+                    is ApkUpdateInstaller.UpdateEvent.Ready -> {
+                        DebugEventLogger.log(
+                            "Updates",
+                            "Download ready: ${event.target.name} (sha256=${event.certificateSha256})"
+                        )
+                        _updateCheckState.value = _updateCheckState.value.copy(
+                            isDownloading = false,
+                            downloadedApk = event.target,
+                            certificateSha256 = event.certificateSha256,
+                        )
+                        // Auto-launch installer on success.
+                        val result = apkInstaller.launchInstaller(event.target)
+                        result.onFailure { err ->
+                            _updateCheckState.value = _updateCheckState.value.copy(
+                                downloadError = err.message ?: "Could not launch installer"
+                            )
+                        }
+                    }
+                    is ApkUpdateInstaller.UpdateEvent.Failed -> {
+                        DebugEventLogger.log("Updates", "Download failed: ${event.error.message}")
+                        _updateCheckState.value = _updateCheckState.value.copy(
+                            isDownloading = false,
+                            downloadError = event.error.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun cancelDownload() {
+        apkInstaller.cancel()
+        downloadJob?.cancel()
+        downloadJob = null
+        _updateCheckState.value = _updateCheckState.value.copy(
+            isDownloading = false,
+            downloadPercent = 0,
+        )
     }
 
     suspend fun buildDiagnosticsSnapshot(): String {

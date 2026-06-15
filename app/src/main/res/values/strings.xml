@@ -1,3 +1,23 @@
 <resources>
     <string name="app_name">DriveReply</string>
+
+    <!-- Updates pane -->
+    <string name="updates_check_button">Check for updates</string>
+    <string name="updates_check_button_busy">Checking…</string>
+    <string name="updates_download_install_button">Download &amp; install</string>
+    <string name="updates_open_release_button">Open release page</string>
+    <string name="updates_install_in_progress">Downloading update…</string>
+    <string name="updates_install_pending_signature">Verifying update signature…</string>
+    <string name="updates_install_signature_mismatch">Update refused: signing certificate does not match this installation.</string>
+    <string name="updates_install_no_activity">No app found to install the update.</string>
+    <string name="updates_status_up_to_date">You are on the latest version.</string>
+    <string name="updates_status_update_available">New version available.</string>
+    <string name="updates_status_check_failed">Update check failed: %1$s</string>
+    <string name="updates_progress_label">%1$d%%</string>
+
+    <!-- Notification channel: in-app update -->
+    <string name="updates_channel_name">App updates</string>
+    <string name="updates_channel_description">Drives the seamless in-app update download.</string>
+    <string name="updates_notification_title">Downloading DriveReply %1$s</string>
+    <string name="updates_notification_text">Tap to view progress</string>
 </resources>

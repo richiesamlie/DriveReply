@@ -95,7 +95,7 @@ object GitHubReleaseChecker {
             .map { part -> part.toIntOrNull() ?: 0 }
     }
 
-    private fun shouldSuppressLegacyFalsePositive(installedTag: String, latestTag: String): Boolean {
+    internal fun shouldSuppressLegacyFalsePositive(installedTag: String, latestTag: String): Boolean {
         // Legacy releases up to v1.0.19 were published with static app metadata (1.0 / 1),
         // which appears as installedTag v1.0.1 regardless of actual release tag.
         if (installedTag != "v1.0.1") return false
