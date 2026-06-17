@@ -139,6 +139,30 @@ class ApkUpdateInstallerTest {
         assertTrue(e.message.contains("404"))
     }
 
+    @Test
+    fun updateError_wrongPackage_carriesBothNames() {
+        val e = UpdateError.WrongPackage(
+            expected = "com.example.drivereply",
+            actual = "com.attacker.drivereply",
+        )
+        assertTrue("expected the actual package in the message: ${e.message}",
+            e.message.contains("com.attacker.drivereply"))
+        assertTrue("expected the expected package in the message: ${e.message}",
+            e.message.contains("com.example.drivereply"))
+    }
+
+    @Test
+    fun updateError_wrongPackage_handlesNullActual() {
+        // Defensive: an APK with a missing packageName (rare but possible
+        // for a corrupted manifest) must still surface a readable error.
+        val e = UpdateError.WrongPackage(
+            expected = "com.example.drivereply",
+            actual = null,
+        )
+        assertTrue("expected the expected package in the message: ${e.message}",
+            e.message.contains("com.example.drivereply"))
+    }
+
     // ------------------------------------------------------------------
     //  Pure-JVM re-implementation that mirrors the logic inside
     //  ApkUpdateInstaller.fingerprint(Signature).
