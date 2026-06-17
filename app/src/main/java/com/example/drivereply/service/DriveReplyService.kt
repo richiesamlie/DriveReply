@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 class DriveReplyService : Service() {
@@ -301,12 +302,12 @@ class DriveReplyService : Service() {
                             setDrivingState(true)
                             clearRepliedContacts()
                         }
-                        setNotificationText(String.format("Driving detected via Speed: %.1f km/h 🚗", speedKmH))
+                        setNotificationText(String.format(Locale.US, "Driving detected via Speed: %.1f km/h 🚗", speedKmH))
                     } else {
                         if (_isDriving.value && speedExitRunnable == null) {
                             DebugEventLogger.log(
                                 TAG,
-                                "Speed below threshold (${String.format("%.1f", speedKmH)} km/h), scheduling stop debounce"
+                                String.format(Locale.US, "Speed below threshold (%.1f km/h), scheduling stop debounce", speedKmH)
                             )
                             speedExitRunnable = Runnable {
                                 setDrivingState(false)

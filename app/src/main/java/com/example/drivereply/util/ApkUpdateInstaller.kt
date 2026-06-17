@@ -74,18 +74,113 @@ class ApkUpdateInstaller(
         channelId: String = DEFAULT_CHANNEL_ID,
     ): Flow<UpdateEvent> = flow<UpdateEvent> {
         val targetFile = File(updatesDir, "DriveReply-$targetTag.apk")
-        // Best-effort cleanup of previous attempts (only the same tag).
+        // Best-effort cleanup of any previous in-progress attempt:
+        //   - zero-byte placeholder from a canceled download
+        //   - any older file in updates/ that we did not produce
+        //     ourselves (an interrupted download that crashed the
+        //     process before completion)
         if (targetFile.exists() && targetFile.length() == 0L) targetFile.delete()
+        cleanupStaleDownloads(keepCanonical = targetFile.name)
         notifier.onPreparing(channelId, targetTag)
         emit(UpdateEvent.Preparing(targetFile))
+
+        // Download + verify with bounded exponential backoff. Only
+        // transient errors (IOException, 5xx, 408/429) are retried;
+        // permanent failures (4xx, signature mismatch, wrong
+        // package, version gate) surface immediately.
+        val maxAttempts = MAX_DOWNLOAD_ATTEMPTS
+        var attempt = 0
+        while (true) {
+            attempt++
+            var transient: IOException? = null
+            try {
+                val outcome = downloadAndVerifyOnce(
+                    url = url,
+                    targetFile = targetFile,
+                    channelId = channelId,
+                    targetTag = targetTag,
+                    publish = { event -> emit(event) },
+                )
+                when (outcome) {
+                    is DownloadOnceOutcome.Done -> {
+                        notifier.onReady(channelId, targetTag, outcome.certificateSha256)
+                        emit(UpdateEvent.Ready(targetFile, outcome.certificateSha256))
+                        return@flow
+                    }
+                    is DownloadOnceOutcome.PermanentFailure -> {
+                        notifier.onFailed(channelId, targetTag, outcome.error.message)
+                        emit(UpdateEvent.Failed(outcome.error))
+                        return@flow
+                    }
+                    is DownloadOnceOutcome.TransientFailure -> transient = outcome.cause
+                }
+            } catch (e: IOException) {
+                transient = e
+            } catch (e: SecurityException) {
+                notifier.onFailed(channelId, targetTag, e.message ?: "Permission denied")
+                emit(UpdateEvent.Failed(UpdateError.PermissionDenied(e.message ?: "Permission denied")))
+                return@flow
+            } catch (e: Exception) {
+                notifier.onFailed(channelId, targetTag, e.message ?: "Unknown error")
+                emit(UpdateEvent.Failed(UpdateError.Unknown(e.message ?: "Unknown error")))
+                return@flow
+            }
+            if (attempt >= maxAttempts) {
+                notifier.onFailed(
+                    channelId, targetTag,
+                    "Network failed after $maxAttempts attempts: ${transient?.message ?: "I/O error"}"
+                )
+                emit(UpdateEvent.Failed(UpdateError.Io(
+                    transient?.message ?: "Network failed after $maxAttempts attempts"
+                )))
+                return@flow
+            }
+            val backoffMs = computeBackoffMs(attempt)
+            notifier.onFailed(
+                channelId, targetTag,
+                "Network error, retrying in ${backoffMs}ms (attempt ${attempt + 1}/$maxAttempts)"
+            )
+            // Cancellable: if the user hits Cancel during the backoff
+            // window, kotlinx.coroutines.delay throws
+            // CancellationException and the flow unwinds cleanly.
+            kotlinx.coroutines.delay(backoffMs)
+            // Drop any partial bytes so the next attempt starts clean.
+            if (targetFile.exists()) targetFile.delete()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /** One pass of the download + verify pipeline. */
+    internal sealed interface DownloadOnceOutcome {
+        data class Done(val certificateSha256: String) : DownloadOnceOutcome
+        data class PermanentFailure(val error: UpdateError) : DownloadOnceOutcome
+        data class TransientFailure(val cause: IOException) : DownloadOnceOutcome
+    }
+
+    internal suspend fun downloadAndVerifyOnce(
+        url: String,
+        targetFile: File,
+        channelId: String,
+        targetTag: String,
+        publish: suspend (UpdateEvent) -> Unit,
+    ): DownloadOnceOutcome {
         val conn = transport.open(url)
         try {
             currentConnection = conn
             val responseCode = conn.responseCode
             if (responseCode !in 200..299) {
-                notifier.onFailed(channelId, targetTag, "HTTP $responseCode")
-                emit(UpdateEvent.Failed(UpdateError.HttpStatus(responseCode)))
-                return@flow
+                // 4xx (except 408/429) are permanent. 5xx and 408/429 are
+                // transient: server issues or "back off and retry".
+                if (responseCode in 400..499 &&
+                    responseCode != 408 && responseCode != 429
+                ) {
+                    targetFile.delete()
+                    return DownloadOnceOutcome.PermanentFailure(
+                        UpdateError.HttpStatus(responseCode)
+                    )
+                }
+                return DownloadOnceOutcome.TransientFailure(
+                    IOException("HTTP $responseCode")
+                )
             }
             val totalBytes = conn.contentLengthLong.takeIf { it > 0 }
             conn.inputStream.use { input ->
@@ -103,17 +198,17 @@ class ApkUpdateInstaller(
                             if (percent != lastEmittedPercent) {
                                 lastEmittedPercent = percent
                                 notifier.onProgress(channelId, targetTag, percent)
-                                emit(UpdateEvent.Progress(percent, written, totalBytes))
+                                publish(UpdateEvent.Progress(percent, written, totalBytes))
                             }
                         }
                     }
                     output.flush()
                 }
             }
-            emit(UpdateEvent.Verifying(targetFile))
+            publish(UpdateEvent.Verifying(targetFile))
             notifier.onVerifying(channelId, targetTag)
 
-            // Gate #1: versionCode direction (downgrade / already-current).
+            // Gate #1: parse the downloaded APK manifest.
             val pm = context.packageManager
             val apkInfo: PackageInfo = try {
                 pm.getPackageArchiveInfo(
@@ -122,31 +217,30 @@ class ApkUpdateInstaller(
                 ) ?: throw IllegalStateException("PackageManager returned null for APK")
             } catch (e: Exception) {
                 targetFile.delete()
-                notifier.onFailed(channelId, targetTag, "Could not parse APK manifest")
-                emit(UpdateEvent.Failed(UpdateError.Unknown("Could not parse APK manifest: ${e.message}")))
-                return@flow
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.Unknown("Could not parse APK manifest: ${e.message}")
+                )
             }
 
             // Gate #1b: package name must match the installed app.
-            // A signing certificate can be shared across multiple apps
-            // from the same developer, so a cert match alone is not
-            // sufficient to prove the download is a DriveReply build.
             if (apkInfo.packageName != context.packageName) {
                 targetFile.delete()
-                notifier.onFailed(channelId, targetTag, "Wrong package")
-                emit(UpdateEvent.Failed(
-                    UpdateError.WrongPackage(expected = context.packageName, actual = apkInfo.packageName)
-                ))
-                return@flow
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.WrongPackage(
+                        expected = context.packageName,
+                        actual = apkInfo.packageName,
+                    )
+                )
             }
 
+            // Gate #2: versionCode direction.
             val installedInfo = try {
                 pm.getPackageInfo(context.packageName, 0)
             } catch (e: Exception) {
                 targetFile.delete()
-                notifier.onFailed(channelId, targetTag, "Could not read installed app info")
-                emit(UpdateEvent.Failed(UpdateError.Unknown("Could not read installed info: ${e.message}")))
-                return@flow
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.Unknown("Could not read installed info: ${e.message}")
+                )
             }
             when (val versionCheck = compareVersionCodes(
                 // longVersionCode was added in API 28 (P); minSdk = 29 so
@@ -157,44 +251,32 @@ class ApkUpdateInstaller(
                 VersionCheckResult.Newer -> { /* proceed to signature check */ }
                 VersionCheckResult.AlreadyCurrent -> {
                     targetFile.delete()
-                    notifier.onFailed(channelId, targetTag, "Already up to date")
-                    emit(UpdateEvent.Failed(UpdateError.AlreadyCurrent))
-                    return@flow
+                    return DownloadOnceOutcome.PermanentFailure(
+                        UpdateError.AlreadyCurrent
+                    )
                 }
                 is VersionCheckResult.Downgrade -> {
                     targetFile.delete()
-                    notifier.onFailed(channelId, targetTag, "Refusing downgrade")
-                    emit(UpdateEvent.Failed(
+                    return DownloadOnceOutcome.PermanentFailure(
                         UpdateError.Downgrade(versionCheck.downloaded, versionCheck.installed)
-                    ))
-                    return@flow
+                    )
                 }
             }
 
-            // Gate #2: signing certificate must match the installed app.
+            // Gate #3: signing certificate must match the installed app.
             val verification = signatureStore.verifyMatchesInstalledApp(targetFile, apkInfo)
             if (verification !is SignatureMatchResult.Matches) {
                 targetFile.delete()
-                notifier.onFailed(channelId, targetTag, "Signature mismatch")
-                emit(UpdateEvent.Failed(UpdateError.SignatureMismatch(verification.javaClass.simpleName)))
-                return@flow
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.SignatureMismatch(verification.javaClass.simpleName)
+                )
             }
-            notifier.onReady(channelId, targetTag, verification.certificateSha256)
-            emit(UpdateEvent.Ready(targetFile, verification.certificateSha256))
-        } catch (e: IOException) {
-            notifier.onFailed(channelId, targetTag, e.message ?: "I/O error")
-            emit(UpdateEvent.Failed(UpdateError.Io(e.message ?: "I/O error")))
-        } catch (e: SecurityException) {
-            notifier.onFailed(channelId, targetTag, e.message ?: "Permission denied")
-            emit(UpdateEvent.Failed(UpdateError.PermissionDenied(e.message ?: "Permission denied")))
-        } catch (e: Exception) {
-            notifier.onFailed(channelId, targetTag, e.message ?: "Unknown error")
-            emit(UpdateEvent.Failed(UpdateError.Unknown(e.message ?: "Unknown error")))
+            return DownloadOnceOutcome.Done(verification.certificateSha256)
         } finally {
             currentConnection = null
             conn.disconnect()
         }
-    }.flowOn(Dispatchers.IO)
+    }
 
     /**
      * Fire the system install intent for [apk]. The user sees the standard
@@ -233,6 +315,25 @@ class ApkUpdateInstaller(
     fun cancel() {
         currentConnection?.disconnect()
         currentConnection = null
+    }
+
+    /**
+     * Delete any non-canonical files left in [updatesDir]. Called at
+     * the start of a new download to make sure an interrupted previous
+     * attempt (process killed mid-download, app uninstalled mid-update)
+     * does not accumulate as cache garbage.
+     */
+    fun cleanupStaleDownloads(keepCanonical: String? = null) {
+        if (!updatesDir.isDirectory) return
+        val files = updatesDir.listFiles() ?: return
+        for (f in files) {
+            if (keepCanonical != null && f.name == keepCanonical) continue
+            try {
+                f.delete() // best effort
+            } catch (_: SecurityException) {
+                // ignore
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -498,6 +599,25 @@ class ApkUpdateInstaller(
         const val DEFAULT_CHANNEL_ID = "drive_reply_updates"
         const val DEFAULT_NOTIFICATION_ID = 4701
         const val EXTRA_OPEN_UPDATES = "com.example.drivereply.extra.OPEN_UPDATES"
+
+        /**
+         * Maximum number of download attempts before we surface a
+         * permanent `UpdateError.Io`. Three gives a flaky connection
+         * ~1+2+4 = 7 seconds of total backoff before giving up,
+         * which is enough to ride out a brief WiFi handoff without
+         * making the user wait too long.
+         */
+        const val MAX_DOWNLOAD_ATTEMPTS = 3
+
+        /**
+         * Exponential backoff, in milliseconds.
+         *   attempt 1 (just failed) -> 1_000 ms before retry
+         *   attempt 2 (just failed) -> 2_000 ms before retry
+         *   attempt 3 (just failed) -> give up (caller checks the
+         *   attempt counter before calling this)
+         */
+        internal fun computeBackoffMs(attempt: Int): Long =
+            (1L shl (attempt - 1).coerceAtLeast(0)) * 1_000L
 
         /**
          * Compare the versionCode of a downloaded APK against the

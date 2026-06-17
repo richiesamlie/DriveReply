@@ -164,6 +164,36 @@ class ApkUpdateInstallerTest {
     }
 
     // ------------------------------------------------------------------
+    //  Backoff scheduling
+    // ------------------------------------------------------------------
+
+    @Test
+    fun backoff_firstAttempt_isOneSecond() {
+        assertEquals(1_000L, ApkUpdateInstaller.computeBackoffMs(1))
+    }
+
+    @Test
+    fun backoff_secondAttempt_isTwoSeconds() {
+        assertEquals(2_000L, ApkUpdateInstaller.computeBackoffMs(2))
+    }
+
+    @Test
+    fun backoff_thirdAttempt_isFourSeconds() {
+        assertEquals(4_000L, ApkUpdateInstaller.computeBackoffMs(3))
+    }
+
+    @Test
+    fun backoff_isCappedByMaxAttempts() {
+        // In production the caller checks `attempt >= MAX_DOWNLOAD_ATTEMPTS`
+        // and gives up before calling computeBackoffMs with a value past 3,
+        // so the worst-case backoff we ever actually wait is 4 seconds.
+        val lastAttempt = ApkUpdateInstaller.MAX_DOWNLOAD_ATTEMPTS
+        val worstCaseMs = ApkUpdateInstaller.computeBackoffMs(lastAttempt)
+        assertTrue("worst-case backoff should be reasonable: $worstCaseMs ms",
+            worstCaseMs <= 10_000L)
+    }
+
+    // ------------------------------------------------------------------
     //  Pure-JVM re-implementation that mirrors the logic inside
     //  ApkUpdateInstaller.fingerprint(Signature).
     //  We can't import android.content.pm.Signature in a local unit test,

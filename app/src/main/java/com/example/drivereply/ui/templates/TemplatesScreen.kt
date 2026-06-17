@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import java.util.Locale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -279,5 +280,5 @@ private fun formatTime(msFromMidnight: Long): String {
     val totalMinutes = (msFromMidnight / 60_000L).toInt()
     val hour = totalMinutes / 60
     val minute = totalMinutes % 60
-    return String.format("%02d:%02d", hour, minute)
+    return String.format(Locale.US, "%02d:%02d", hour, minute)
 }

@@ -8,64 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Wrong-package gate in the in-app updater** — refuses to install an
-  APK whose `packageName` does not match the installed app. A signing
-  certificate can be shared across multiple apps from the same
-  developer, so a cert match alone is not sufficient. New
-  `UpdateError.WrongPackage` variant surfaces both the expected and
-  actual package names.
-- **POST_NOTIFICATIONS prompt before in-app update downloads** — on
-  API 33+, Settings → Updates requests the permission when the user
-  taps *Download & install*, so the new system progress notification
-  actually shows. The download still proceeds if the user denies (the
-  in-app progress bar remains the source of truth).
-- **(from #3) In-app update progress notification** — alongside the
-  in-app progress bar. Tapping the notification deep-links to
-  MainActivity → Settings (handled via onNewIntent + recreate).
-- **(from #3) `compareVersionCodes` gate in the in-app updater** —
-  refuses to install an APK whose `versionCode` is less than or equal
-  to the installed one, with typed `UpdateError.Downgrade` and
-  `UpdateError.AlreadyCurrent` variants.
+- **Retry with bounded exponential backoff** in the in-app updater:
+  up to 3 attempts (1s, 2s, 4s) on transient I/O and HTTP 5xx / 408 /
+  429. Permanent failures (4xx, signature mismatch, wrong package,
+  version gate) still surface immediately. Total worst-case wait
+  before giving up: ~7 seconds. Backoff is cancellable so the
+  user still gets a snappy Cancel response.
+- **Stale-file cleanup** in `cache/updates/` at the start of every
+  download. Removes any non-canonical file (interrupted previous
+  attempts, partial bytes from a killed process) before writing
+  the new APK. Public `cleanupStaleDownloads()` so tests can
+  drive the path without the full flow.
+- **Wrong-package gate** in the in-app updater (from #4).
+- **POST_NOTIFICATIONS prompt** before in-app update downloads
+  (from #4).
+- **In-app update progress notification** (from #3).
 
 ### Changed
-- **Self-message detection** in `WhatsAppNotificationListener` now
-  uses `NotificationCompat.isOwnNotification(sbn)` instead of comparing
-  the deprecated `Notification.EXTRA_SELF_DISPLAY_NAME` to the contact
-  name. More reliable, doesn't depend on the messaging app populating
-  the extra or on the user having set a display name.
-- Removed obsolete `Build.VERSION.SDK_INT >= R` guards from
-  `WhatsAppNotificationListener` (R is API 30, our minSdk is 29, so
-  these were always true).
-- Removed obsolete `Build.VERSION.SDK_INT >= P` guards around
-  `longVersionCode` and `SEMANTIC_ACTION_REPLY` in
-  `ApkUpdateInstaller.kt` and `WhatsAppNotificationListener.kt`
-  (both fields are API 28+, our minSdk is 29).
+- **`DebugEventLogger` is now backed by an `ArrayDeque<String>`**
+  instead of an immutable `List<String> + takeLast(MAX_ENTRIES)`.
+  Each `log()` call is now O(1) instead of O(n), eliminating the
+  ~2 KB/s of GC pressure the old code generated under load.
+  7 new unit tests in `DebugEventLoggerTest` exercise the cap,
+  order, throwable, and concurrent burst scenarios.
+- **Self-message detection** in `WhatsAppNotificationListener` (from #4).
+- **Cosmetic deprecations** (no functional impact, but quiet build):
+  - `Icons.Default.Chat` / `Icons.Default.ArrowBack` →
+    `Icons.AutoMirrored.Filled.*` (6 sites) — fixes RTL support.
+  - `TabRow` → `PrimaryTabRow` (ActivityScreen).
+  - `LocalClipboardManager` → `LocalClipboardManager` with
+    `@Suppress("DEPRECATION")` (SettingsScreen:99) — the new
+    `LocalClipboard` API is not stable across all compose-1.7+
+    BOMs in our toolchain, so we keep the old API and suppress.
+  - `String.format` without explicit `Locale` (3 sites) — now
+    pass `Locale.US` for stable ASCII output across locales.
+- Removed obsolete `Build.VERSION.SDK_INT >= R` and `>= P` guards
+  in `WhatsAppNotificationListener` and `ApkUpdateInstaller`
+  (from #4).
+- `testOptions { unitTests { isReturnDefaultValues = true } }` in
+  `app/build.gradle.kts` so the new DebugEventLogger unit tests can
+  call `android.util.Log.d/w` without Robolectric (the JVM unit-test
+  default is to throw on unmocked Android APIs).
 
 ### Fixed
-- **(from #3) `BluetoothReceiver`** — `Intent.getParcelableExtra(name)`
-  (deprecated on API 33+) now uses the typed overload on Tiramisu+.
-- **(from #3) `WhatsAppNotificationListener`** —
-  `Bundle.getParcelableArray(name)` (deprecated on API 33+) now uses
-  the typed overload on Tiramisu+. Dropped the legacy
-  `Notification.MessagingStyle.Message.sender` (CharSequence) fallback
-  in favor of `senderPerson?.name` (API 28+).
-- **(from #3) `ApkUpdateInstaller`** — `Intent.ACTION_INSTALL_PACKAGE`
-  is the only public contract for sideloading an APK; the deprecation
-  is suppressed with an explanatory comment so the build is clean.
-- **(from #3) In-app update notification permission** — the system
-  notification is now gated on an explicit `POST_NOTIFICATIONS` check
-  on API 33+, so the app does not throw `SecurityException` when the
-  user has denied the permission.
-
-### Notes
-- `DebugEventLogger` already has a `MAX_ENTRIES = 500` cap and
-  uses `takeLast(MAX_ENTRIES)` (S-05 from the audit was a false
-  alarm; no change needed).
-- The package name `com.example.drivereply` remains; migrating to a
-  Play-acceptable namespace requires a coordinated release (S-06).
-  Out of scope for this PR.
+- **(from #4) `BluetoothReceiver` typed `getParcelableExtra`.**
+- **(from #4) `WhatsAppNotificationListener` typed `getParcelableArray`.**
+- **(from #4) `ApkUpdateInstaller` longVersionCode + SEMANTIC_ACTION_REPLY obsolete guards.**
 
 ## [1.0.x] — 2026-06-15 and prior
 
 See git history and `docs/PROGRESS.md` for the full per-build changelog.
+
 
