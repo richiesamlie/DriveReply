@@ -2,6 +2,7 @@ package com.example.drivereply.ui.settings
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -72,6 +73,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.drivereply.util.PermissionHelper
@@ -114,6 +116,10 @@ fun SettingsScreen(
     var diagnosticsSnapshot by remember {
         mutableStateOf("Tap Copy Snapshot to generate a compact status report for support.")
     }
+    // When the user taps "Download & install" and we have to ask for
+    // POST_NOTIFICATIONS first, this flag is set so the launcher's
+    // callback can fire the actual download regardless of grant result.
+    var pendingStartDownload by remember { mutableStateOf(false) }
 
     val activityRecognitionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -121,7 +127,16 @@ fun SettingsScreen(
     )
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
-        onResult = { viewModel.refreshSetupState() }
+        onResult = {
+            viewModel.refreshSetupState()
+            if (pendingStartDownload) {
+                pendingStartDownload = false
+                // Start the download even if the user denied the
+                // notification permission — the in-app progress bar is
+                // the source of truth either way.
+                viewModel.startDownloadAndInstall()
+            }
+        }
     )
     val fineLocationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
@@ -272,7 +287,24 @@ fun SettingsScreen(
                 SettingsPane.UPDATES_ABOUT -> SettingsUpdatesAbout(
                     updateState = updateState,
                     onCheckUpdates = viewModel::checkForUpdates,
-                    onStartDownload = viewModel::startDownloadAndInstall,
+                    onStartDownload = {
+                        // On API 33+ the in-app update posts a system
+                        // progress notification. Request POST_NOTIFICATIONS
+                        // before kicking off the download so the user
+                        // actually sees it. The download still proceeds
+                        // even if the user denies — the in-app progress
+                        // bar is the source of truth.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.POST_NOTIFICATIONS,
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            pendingStartDownload = true
+                            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            viewModel.startDownloadAndInstall()
+                        }
+                    },
                     onCancelDownload = viewModel::cancelDownload,
                     onOpenLink = { url ->
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {

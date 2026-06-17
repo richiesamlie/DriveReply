@@ -126,6 +126,20 @@ class ApkUpdateInstaller(
                 emit(UpdateEvent.Failed(UpdateError.Unknown("Could not parse APK manifest: ${e.message}")))
                 return@flow
             }
+
+            // Gate #1b: package name must match the installed app.
+            // A signing certificate can be shared across multiple apps
+            // from the same developer, so a cert match alone is not
+            // sufficient to prove the download is a DriveReply build.
+            if (apkInfo.packageName != context.packageName) {
+                targetFile.delete()
+                notifier.onFailed(channelId, targetTag, "Wrong package")
+                emit(UpdateEvent.Failed(
+                    UpdateError.WrongPackage(expected = context.packageName, actual = apkInfo.packageName)
+                ))
+                return@flow
+            }
+
             val installedInfo = try {
                 pm.getPackageInfo(context.packageName, 0)
             } catch (e: Exception) {
@@ -135,16 +149,10 @@ class ApkUpdateInstaller(
                 return@flow
             }
             when (val versionCheck = compareVersionCodes(
-                downloaded = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    apkInfo.longVersionCode.toInt()
-                } else {
-                    @Suppress("DEPRECATION") apkInfo.versionCode
-                },
-                installed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    installedInfo.longVersionCode.toInt()
-                } else {
-                    @Suppress("DEPRECATION") installedInfo.versionCode
-                },
+                // longVersionCode was added in API 28 (P); minSdk = 29 so
+                // it is always available.
+                downloaded = apkInfo.longVersionCode.toInt(),
+                installed = installedInfo.longVersionCode.toInt(),
             )) {
                 VersionCheckResult.Newer -> { /* proceed to signature check */ }
                 VersionCheckResult.AlreadyCurrent -> {
@@ -268,6 +276,8 @@ class ApkUpdateInstaller(
             UpdateError("Refusing to install older build: downloaded=$downloaded, installed=$installed")
         data object AlreadyCurrent :
             UpdateError("Downloaded build has the same versionCode as the installed app")
+        data class WrongPackage(val expected: String, val actual: String?) :
+            UpdateError("Downloaded APK is for package '$actual' but this installation is '$expected'")
         data class Unknown(override val message: String) : UpdateError(message)
     }
 

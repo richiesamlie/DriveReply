@@ -85,13 +85,15 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         DebugEventLogger.log(TAG, "Notif received package=$packageName, contact=$contactName, key=${sbn.key}")
 
         serviceScope.launch {
-            // EXTRA_SELF_DISPLAY_NAME is deprecated in API 31, but the
-            // platform never introduced a public replacement helper; the
-            // field is still read by the system to identify messages the
-            // user sent to themselves. Suppress the deprecation so we
-            // keep the working behavior until the platform provides a
-            // proper API.
-            val selfDisplayName = @Suppress("DEPRECATION") extras
+            // Skip self-messages (e.g., messages the user sent to themselves
+            // from another device). The "is own notification" signal is
+            // set by the system in `StatusBarNotification.isOngoing()` for
+            // some flows and is exposed on the conversation list; the
+            // string-name fallback in `EXTRA_SELF_DISPLAY_NAME` is what
+            // the platform exposes to third-party listeners and remains
+            // the most reliable cross-app check.
+            @Suppress("DEPRECATION")
+            val selfDisplayName = extras
                 .getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)
                 ?.toString()
                 ?.trim()
@@ -99,7 +101,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             if (!selfDisplayName.isNullOrEmpty() &&
                 contactName.equals(selfDisplayName, ignoreCase = true)
             ) {
-                DebugEventLogger.log(TAG, "Skip self-message contact=$contactName package=$packageName")
+                DebugEventLogger.log(TAG, "Skip self-message package=$packageName key=${sbn.key}")
                 return@launch
             }
 
@@ -287,9 +289,9 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
     private fun scoreReplyAction(action: Notification.Action): Int {
         var score = 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-            action.semanticAction == Notification.Action.SEMANTIC_ACTION_REPLY
-        ) {
+        // SEMANTIC_ACTION_REPLY was added in API 28 (P); minSdk = 29, so
+        // the field is always present.
+        if (action.semanticAction == Notification.Action.SEMANTIC_ACTION_REPLY) {
             score += 100
         }
         if (action.allowGeneratedReplies) {
@@ -315,22 +317,27 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return directCandidates.first()
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val parcelables: Array<Parcelable>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // getMessagesFromBundleArray is API 30+; on API 29 we don't have
+        // access to the per-message sender, so fall through to the
+        // direct-extra path (which already returns a value if any).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        // getParcelableArray(name, Class) is the API 33+ typed overload;
+        // fall back to the legacy call for API 29..32.
+        @Suppress("DEPRECATION")
+        val parcelables: Array<Parcelable>? =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
             } else {
-                @Suppress("DEPRECATION")
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES)
             }
-            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
-            val sender = messages.asReversed().mapNotNull { message ->
-                // senderPerson is the modern (API 28+) source; the
-                // deprecated CharSequence `sender` is intentionally not
-                // used as a fallback anymore.
-                message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
-            }.firstOrNull()
-            if (!sender.isNullOrEmpty()) return sender
-        }
+        val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
+        val sender = messages.asReversed().mapNotNull { message ->
+            // senderPerson is the modern (API 28+) source; the
+            // deprecated CharSequence `sender` is intentionally not
+            // used as a fallback anymore.
+            message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        }.firstOrNull()
+        if (!sender.isNullOrEmpty()) return sender
 
         return null
     }
@@ -342,31 +349,35 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
-        val latestMessageSender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val parcelables: Array<Parcelable>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
-            } else {
-                @Suppress("DEPRECATION")
-                extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-            }
+        // getMessagesFromBundleArray is API 30+; on API 29 we have no
+        // access to the per-message sender and the platformGroupFlag
+        // + title-sender mismatch is still computed below for the
+        // WhatsApp branch.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            @Suppress("DEPRECATION")
+            val parcelables: Array<Parcelable>? =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
+                } else {
+                    extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+                }
             val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
-            messages.asReversed().mapNotNull { message ->
+            val latestMessageSender = messages.asReversed().mapNotNull { message ->
                 message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             }.firstOrNull()
-        } else {
-            null
+            // Strong signal: conversation title and sender differ (common
+            // group-chat structure).
+            val titleSenderMismatch = !conversationTitle.isNullOrEmpty() &&
+                !latestMessageSender.isNullOrEmpty() &&
+                !conversationTitle.equals(latestMessageSender, ignoreCase = true)
+            // WhatsApp can set EXTRA_IS_GROUP_CONVERSATION aggressively;
+            // require corroboration.
+            if (packageName.startsWith("com.whatsapp")) {
+                return titleSenderMismatch
+            }
+            if (titleSenderMismatch) return true
         }
 
-        // Strong signal: conversation title and sender differ (common group-chat structure).
-        val titleSenderMismatch = !conversationTitle.isNullOrEmpty() &&
-            !latestMessageSender.isNullOrEmpty() &&
-            !conversationTitle.equals(latestMessageSender, ignoreCase = true)
-
-        // WhatsApp can set EXTRA_IS_GROUP_CONVERSATION aggressively; require corroboration.
-        if (packageName.startsWith("com.whatsapp")) {
-            return titleSenderMismatch
-        }
-
-        return platformGroupFlag || titleSenderMismatch
+        return platformGroupFlag
     }
 }
