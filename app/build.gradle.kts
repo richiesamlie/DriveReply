@@ -19,15 +19,23 @@ val releaseVersionCode: Int = System.getenv("RELEASE_VERSION_CODE")
     ?.coerceAtLeast(1)
     ?: 1
 
+// DriveReply 2.0 ships under a new applicationId: `com.drivereply.app`.
+// (The pre-2.0 package `com.example.drivereply` was a Play-blocking
+// reserved namespace.) The major version bump signals a *hard* break:
+// the new APK uses a different signing-cert-equivalent package, so
+// users on v1.x MUST uninstall the old build before installing v2.0
+// (the OS will refuse "App not installed" otherwise, because the
+// 1.x and 2.x builds have different applicationIds and therefore
+// different package identities, even though they share a signature).
 val releaseVersionName: String = System.getenv("RELEASE_VERSION_NAME")
     ?.takeIf { it.isNotBlank() }
-    ?: "1.0.$releaseVersionCode"
+    ?: "2.0.$releaseVersionCode"
 
 android {
-    namespace = "com.example.drivereply"
+    namespace = "com.drivereply.app"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.example.drivereply"
+        applicationId = "com.drivereply.app"
         minSdk = 29
         targetSdk = 36
         versionCode = releaseVersionCode
