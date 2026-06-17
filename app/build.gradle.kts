@@ -78,6 +78,16 @@ android {
         excludes += "/META-INF/{AL2.0,LGPL2.1}"
       }
     }
+
+    testOptions {
+        unitTests {
+            // android.util.Log.d/w/i/e throw "Method not mocked" in JVM
+            // unit tests by default. Returning default values lets the
+            // DebugEventLoggerTest exercise the in-memory buffer without
+            // pulling in Robolectric.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 kotlin {

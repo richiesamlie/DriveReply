@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -125,7 +127,7 @@ fun MainShell(
                 NavigationBarItem(
                     selected = currentTab == Tab.Templates,
                     onClick = { currentTab = Tab.Templates },
-                    icon = { Icon(imageVector = Icons.Default.Chat, contentDescription = "Templates") },
+                    icon = { Icon(imageVector = Icons.AutoMirrored.Filled.Chat, contentDescription = "Templates") },
                     label = { Text("Templates") }
                 )
                 NavigationBarItem(

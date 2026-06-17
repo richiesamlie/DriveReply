@@ -25,6 +25,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Bluetooth
@@ -98,6 +100,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
@@ -175,7 +178,7 @@ fun SettingsScreen(
                     IconButton(onClick = {
                         if (pane == SettingsPane.HOME) onBack() else pane = SettingsPane.HOME
                     }) {
-                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -342,7 +345,7 @@ private fun SettingsHome(
         "$completedChecks/${setupChecks.size} core checks completed",
         Icons.Default.Security
     ) { onSelect(SettingsPane.SETUP) }
-    EntryCard("Preferences", "Reply behavior and retention", Icons.Default.Chat) {
+    EntryCard("Preferences", "Reply behavior and retention", Icons.AutoMirrored.Filled.Chat) {
         onSelect(SettingsPane.PREFERENCES)
     }
     EntryCard("Automation", "Speed and Bluetooth triggers", Icons.Default.Speed) {
@@ -452,7 +455,7 @@ private fun SettingsSetup(
     EntryCard(
         "Supported Apps",
         "$installedCount/${setupState.supportedApps.size} supported apps detected",
-        Icons.Default.Chat
+        Icons.AutoMirrored.Filled.Chat
     ) { }
     if (installedCount == 0) {
         Text(
