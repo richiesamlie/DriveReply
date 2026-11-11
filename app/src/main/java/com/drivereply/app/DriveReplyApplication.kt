@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class DriveReplyApplication : Application() {
@@ -21,6 +22,13 @@ class DriveReplyApplication : Application() {
         appScope.launch {
             preferencesManager.debugLogsEnabled.collectLatest { enabled ->
                 DebugEventLogger.setEnabled(enabled)
+            }
+        }
+        appScope.launch(Dispatchers.IO) {
+            val days = preferencesManager.logRetentionDays.first()
+            if (days > 0) {
+                val threshold = System.currentTimeMillis() - (days.toLong() * 24 * 60 * 60 * 1000L)
+                database.replyLogDao().deleteOlderThan(threshold)
             }
         }
     }

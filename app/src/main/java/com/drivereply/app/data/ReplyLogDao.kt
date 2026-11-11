@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ReplyLogDao {
 
-    @Query("SELECT * FROM reply_log ORDER BY timestamp DESC")
+    @Query("SELECT * FROM reply_log ORDER BY timestamp DESC LIMIT 500")
     fun getAll(): Flow<List<ReplyLogEntry>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

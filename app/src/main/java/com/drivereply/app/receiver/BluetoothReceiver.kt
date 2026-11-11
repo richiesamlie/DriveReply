@@ -67,11 +67,17 @@ class BluetoothReceiver : BroadcastReceiver() {
                 if (deviceAddress in savedDevices) {
                     when (action) {
                         BluetoothDevice.ACTION_ACL_CONNECTED -> {
+                            if (!prefs.isServiceEnabled.first()) {
+                                DebugEventLogger.log(TAG, "Ignoring BT connect because monitoring service is disabled")
+                                return@launch
+                            }
                             // Start service and set driving state to true
                             DriveReplyService.start(context)
-                            DriveReplyService.setDrivingState(true)
-                            DriveReplyService.clearRepliedContacts()
-                            DebugEventLogger.log(TAG, "Matched BT connected $deviceLabel, driving mode enabled")
+                            DriveReplyService.setDrivingState(
+                                true,
+                                DriveReplyService.DrivingStateSource.BLUETOOTH
+                            )
+                            DebugEventLogger.log(TAG, "Matched selected BT device connected, driving mode enabled")
 
                             // Update persistent notification via the service's
                             // own state flow — no startService() from a
@@ -81,16 +87,19 @@ class BluetoothReceiver : BroadcastReceiver() {
                             )
                         }
                         BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                            // End driving state
-                            DriveReplyService.setDrivingState(false)
-                            DebugEventLogger.log(TAG, "Matched BT disconnected $deviceLabel, driving mode disabled")
-                            DriveReplyService.setNotificationText(
-                                "Service active — waiting for driving detection"
+                            // End Bluetooth driving trigger
+                            DriveReplyService.setDrivingState(
+                                false,
+                                DriveReplyService.DrivingStateSource.BLUETOOTH
                             )
+                            DebugEventLogger.log(TAG, "Matched selected BT device disconnected")
+                            if (!DriveReplyService.isDriving.value) {
+                                DriveReplyService.setNotificationText(
+                                    "Service active — waiting for driving detection"
+                                )
+                            }
                         }
                     }
-                } else {
-                    DebugEventLogger.log(TAG, "Ignoring BT device not in selected list: $deviceLabel")
                 }
             } finally {
                 pendingResult.finish()

@@ -31,7 +31,16 @@ interface MessageTemplateDao {
     suspend fun update(template: MessageTemplate)
 
     @Delete
-    suspend fun delete(template: MessageTemplate)
+    suspend fun deleteTemplateRow(template: MessageTemplate)
+
+    @Query("DELETE FROM template_rules WHERE templateId = :templateId")
+    suspend fun deleteRulesByTemplateId(templateId: String)
+
+    @Transaction
+    suspend fun delete(template: MessageTemplate) {
+        deleteRulesByTemplateId(template.id)
+        deleteTemplateRow(template)
+    }
 
     @Query("UPDATE message_templates SET isActive = 0")
     suspend fun deactivateAll()
