@@ -44,41 +44,162 @@ class ApkUpdateInstallerTest {
     }
 
     // ------------------------------------------------------------------
-    //  sha256Base64(): re-implementation of the byte→hash step we use
-    //  inside fingerprint(Signature). We verify the helper logic here in
-    //  pure JVM; the production path is a one-liner that calls
-    //  MessageDigest.getInstance("SHA-256") over Signature.toByteArray().
+    //  fingerprintBytes(): exercises the production SHA-256 -> Base64
+    //  helper directly on the JVM.
     // ------------------------------------------------------------------
 
     @Test
     fun sha256OfBytes_isStable() {
-        val a = sha256Base64("hello".toByteArray())
-        val b = sha256Base64("hello".toByteArray())
+        val a = ApkUpdateInstaller.fingerprintBytes("hello".toByteArray())
+        val b = ApkUpdateInstaller.fingerprintBytes("hello".toByteArray())
         assertEquals(a, b)
     }
 
     @Test
     fun sha256OfBytes_differsForDifferentInput() {
-        val a = sha256Base64("hello".toByteArray())
-        val b = sha256Base64("world".toByteArray())
+        val a = ApkUpdateInstaller.fingerprintBytes("hello".toByteArray())
+        val b = ApkUpdateInstaller.fingerprintBytes("world".toByteArray())
         assertNotEquals(a, b)
     }
 
     @Test
     fun sha256OfBytes_matchesJavaSecurityMessageDigest() {
-        // Sanity check that the helper actually agrees with the JDK's own
-        // SHA-256 implementation (which ApkUpdateInstaller delegates to).
         val bytes = "the quick brown fox jumps over the lazy dog".toByteArray()
         val expected = java.security.MessageDigest.getInstance("SHA-256")
             .digest(bytes)
         val expectedB64 = Base64.getEncoder().withoutPadding().encodeToString(expected)
-        assertEquals(expectedB64, sha256Base64(bytes))
+        assertEquals(expectedB64, ApkUpdateInstaller.fingerprintBytes(bytes))
     }
 
     @Test
     fun sha256OfBytes_producesAscii() {
-        val out = sha256Base64("anything".toByteArray())
+        val out = ApkUpdateInstaller.fingerprintBytes("anything".toByteArray())
         assertTrue("output should be base64: $out", out.all { it.isLetterOrDigit() || it == '+' || it == '/' })
+    }
+
+    // ------------------------------------------------------------------
+    //  sanitizeTag & isTrustedUpdateUrl
+    // ------------------------------------------------------------------
+
+    @Test
+    fun sanitizeTag_stripsPathTraversalAndUnsafeChars() {
+        assertEquals("v2.0.5", ApkUpdateInstaller.sanitizeTag("v2.0.5"))
+        assertEquals("evil", ApkUpdateInstaller.sanitizeTag("../../evil"))
+        assertEquals("latest", ApkUpdateInstaller.sanitizeTag("   "))
+        assertEquals("latest", ApkUpdateInstaller.sanitizeTag("..."))
+    }
+
+    @Test
+    fun isTrustedUpdateUrl_allowsOnlyHttpsGitHubHosts() {
+        assertTrue(
+            ApkUpdateInstaller.isTrustedUpdateUrl(
+                "https://github.com/richiesamlie/DriveReply/releases/download/v2.0.5/DriveReply-v2.0.5-release.apk"
+            )
+        )
+        assertTrue(
+            ApkUpdateInstaller.isTrustedUpdateUrl(
+                "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/apk"
+            )
+        )
+        assertTrue(
+            !ApkUpdateInstaller.isTrustedUpdateUrl(
+                "http://github.com/richiesamlie/DriveReply/releases/download/v2.0.5/DriveReply-v2.0.5-release.apk"
+            )
+        )
+        assertTrue(
+            !ApkUpdateInstaller.isTrustedUpdateUrl(
+                "https://evil.example.com/DriveReply-v2.0.5-release.apk"
+            )
+        )
+        assertTrue(!ApkUpdateInstaller.isTrustedUpdateUrl(""))
+    }
+
+    // ------------------------------------------------------------------
+    //  verifySignerBytesMatch (single-signer, multi-signer, key rotation)
+    // ------------------------------------------------------------------
+
+    @Test
+    fun verifySignerBytesMatch_matchingSingleSigner_returnsMatches() {
+        val certA = "cert-alpha".toByteArray()
+        val result = ApkUpdateInstaller.verifySignerBytesMatch(
+            apkContentsSigners = listOf(certA),
+            installedContentsSigners = listOf(certA.copyOf())
+        )
+        assertEquals(
+            SignatureMatchResult.Matches(ApkUpdateInstaller.fingerprintBytes(certA)),
+            result
+        )
+    }
+
+    @Test
+    fun verifySignerBytesMatch_differentSingleSignerWithoutLineage_returnsMismatch() {
+        val certA = "cert-alpha".toByteArray()
+        val certB = "cert-beta".toByteArray()
+        val result = ApkUpdateInstaller.verifySignerBytesMatch(
+            apkContentsSigners = listOf(certB),
+            installedContentsSigners = listOf(certA)
+        )
+        assertEquals(SignatureMatchResult.Mismatch, result)
+    }
+
+    @Test
+    fun verifySignerBytesMatch_keyRotationLineageContainsInstalledAndEndsAtApkActive_returnsMatches() {
+        val oldCert = "cert-old".toByteArray()
+        val newCert = "cert-new".toByteArray()
+        val result = ApkUpdateInstaller.verifySignerBytesMatch(
+            apkContentsSigners = listOf(newCert),
+            apkHistorySigners = listOf(oldCert, newCert),
+            installedContentsSigners = listOf(oldCert)
+        )
+        assertEquals(
+            SignatureMatchResult.Matches(ApkUpdateInstaller.fingerprintBytes(newCert)),
+            result
+        )
+    }
+
+    @Test
+    fun verifySignerBytesMatch_forgedHistoryNotEndingAtActive_returnsMismatch() {
+        val oldCert = "cert-old".toByteArray()
+        val newCert = "cert-new".toByteArray()
+        val unrelatedCert = "cert-unrelated".toByteArray()
+        val result = ApkUpdateInstaller.verifySignerBytesMatch(
+            apkContentsSigners = listOf(newCert),
+            apkHistorySigners = listOf(oldCert, unrelatedCert),
+            installedContentsSigners = listOf(oldCert)
+        )
+        assertEquals(SignatureMatchResult.Mismatch, result)
+    }
+
+    @Test
+    fun verifySignerBytesMatch_multiSignerSetOrderIndependent_returnsMatches() {
+        val certA = "cert-alpha".toByteArray()
+        val certB = "cert-beta".toByteArray()
+        val result = ApkUpdateInstaller.verifySignerBytesMatch(
+            apkContentsSigners = listOf(certB, certA),
+            apkHasMultipleSigners = true,
+            installedContentsSigners = listOf(certA, certB),
+            installedHasMultipleSigners = true
+        )
+        assertTrue(result is SignatureMatchResult.Matches)
+    }
+
+    @Test
+    fun verifySignerBytesMatch_emptySigners_returnsExpectedSentinel() {
+        val certA = "cert-alpha".toByteArray()
+        assertEquals(
+            SignatureMatchResult.NoSigners,
+            ApkUpdateInstaller.verifySignerBytesMatch(
+                apkContentsSigners = emptyList(),
+                installedContentsSigners = listOf(certA)
+            )
+        )
+        assertEquals(
+            SignatureMatchResult.NoInstalledSigners,
+            ApkUpdateInstaller.verifySignerBytesMatch(
+                apkContentsSigners = listOf(certA),
+                installedContentsSigners = emptyList()
+            )
+        )
     }
 
     // ------------------------------------------------------------------
@@ -191,17 +312,5 @@ class ApkUpdateInstallerTest {
         val worstCaseMs = ApkUpdateInstaller.computeBackoffMs(lastAttempt)
         assertTrue("worst-case backoff should be reasonable: $worstCaseMs ms",
             worstCaseMs <= 10_000L)
-    }
-
-    // ------------------------------------------------------------------
-    //  Pure-JVM re-implementation that mirrors the logic inside
-    //  ApkUpdateInstaller.fingerprint(Signature).
-    //  We can't import android.content.pm.Signature in a local unit test,
-    //  so we test the byte-path the production code delegates to.
-    // ------------------------------------------------------------------
-    private fun sha256Base64(bytes: ByteArray): String {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
-        val digest = md.digest(bytes)
-        return Base64.getEncoder().withoutPadding().encodeToString(digest)
     }
 }

@@ -26,16 +26,16 @@ This roadmap prioritizes reliability first, then UX clarity, then scale features
 
 - Scope:
   - Finalize and release listener health UX and diagnostics.
-  - Validate reply behavior across WhatsApp, Telegram, Signal, Messenger, and SMS packages.
+  - Validate reply behavior across WhatsApp, WhatsApp Business, Telegram, Telegram X, Signal, Messenger, and SMS packages (Google/Samsung/AOSP).
   - Ensure no self-reply or repeated reply loops in one driving session.
 - Deliverables:
   - Structured debug logs covering full decision path (received, filtered, replied, skipped reason).
-  - Stable notification listener status on Home with manual rebind fallback.
+  - Stable notification listener status on Home (`ReadinessCard`) with manual rebind fallback.
   - Release checklist for permission and listener-state verification:
     - [docs/PHASE1_RELIABILITY_CHECKLIST.md](docs/PHASE1_RELIABILITY_CHECKLIST.md)
 - Exit criteria:
   - `listenerConnected=true` within 10 seconds after enabling service in >95% manual test runs.
-  - No duplicate auto-reply per conversation per driving session.
+  - No duplicate auto-reply per conversation per driving session (plus cross-session cooldown guard).
   - No reply sent to self-authored notification events.
 
 ## Phase 2: UX Confidence Layer (June 13, 2026 to June 26, 2026)
@@ -45,7 +45,8 @@ This roadmap prioritizes reliability first, then UX clarity, then scale features
   - Improve setup clarity for permissions and failure recovery actions.
   - Reduce ambiguity between "permission granted" and "listener connected" states.
 - Deliverables:
-  - Home screen "Supported Apps Detected" list with installed green check indicators.
+  - `Settings → Setup & Access` "Supported Apps" list with installed green check indicators and Home `ReadinessCard` blockers.
+  - Schedule & contact rule editor in `EditTemplateScreen` (contact filter, days of week, start/end time window).
   - Setup flow copy updates for listener recovery steps.
   - Quick diagnostics section users can paste into support reports.
 - Exit criteria:

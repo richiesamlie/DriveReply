@@ -18,10 +18,10 @@ Use this checklist before a release candidate to verify listener and auto-reply 
 1. Listener startup health
 - Action: Toggle service ON, wait 10 seconds.
 - Expect logs:
-  - `DriveReplyService` service created/start requested
-  - `DriveReplyListener` listener connected
+  - `[DriveReplyService]` service created/start requested
+  - `[DriveReplyListener]` Notification listener connected
 - Pass condition:
-  - `listenerConnected=true` visible in permission refresh logs.
+  - `listenerConnected=true` visible in `[MainScreenVM]` permission refresh logs or Diagnostics Snapshot.
 
 2. Rebind recovery path
 - Action: Keep listener permission ON and wait up to 30 seconds after a disconnected state.

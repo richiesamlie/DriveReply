@@ -20,8 +20,14 @@ interface TemplateRuleDao {
     @Query("SELECT * FROM template_rules WHERE templateId = :templateId")
     fun getRulesForTemplate(templateId: String): Flow<List<TemplateRule>>
 
-    @Query("SELECT * FROM template_rules WHERE contactName = :contactName OR contactName IS NULL")
+    @Query("SELECT * FROM template_rules WHERE templateId = :templateId")
+    suspend fun getByTemplateId(templateId: String): List<TemplateRule>
+
+    @Query("SELECT * FROM template_rules WHERE LOWER(TRIM(contactName)) = LOWER(TRIM(:contactName)) OR contactName IS NULL")
     suspend fun getRulesForContact(contactName: String): List<TemplateRule>
+
+    @Query("DELETE FROM template_rules WHERE templateId = :templateId")
+    suspend fun deleteByTemplateId(templateId: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(rule: TemplateRule)

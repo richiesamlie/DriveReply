@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drivereply.app.DriveReplyApplication
 import com.drivereply.app.data.MessageTemplate
+import com.drivereply.app.service.DriveReplyService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +28,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     fun completeOnboarding(
         templateName: String,
         templateBody: String,
+        detectionMode: String = "ACTIVITY",
         onComplete: () -> Unit
     ) {
         if (_uiState.value.isCompleting) return
@@ -45,6 +47,19 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                         isActive = true
                     )
                 )
+            } else {
+                val updated = existingActive.copy(
+                    name = templateName.trim(),
+                    body = templateBody.trim(),
+                    isActive = true
+                )
+                templateDao.update(updated)
+            }
+
+            val enableService = !detectionMode.equals("MANUAL", ignoreCase = true)
+            preferencesManager.setServiceEnabled(enableService)
+            if (enableService) {
+                DriveReplyService.start(app)
             }
 
             preferencesManager.setHasCompletedOnboarding(true)

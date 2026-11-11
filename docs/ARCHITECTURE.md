@@ -27,37 +27,38 @@ sequenceDiagram
 
     Note over Sensors, Recv: Trigger Source 3: Bluetooth Car Connection
     Sensors->>Recv: Broadcast: BluetoothDevice ACL_CONNECTED
-    Recv->>Service: Matches paired MAC -> Start Service & Set DrivingState = True
+    Recv->>Service: If ServiceEnabled & Matches paired MAC -> Start Service & Set DrivingState = True
 
-    Service->>Service: Update Persistent Notification ("Driving mode active 🚗")
+    Service->>Service: Update Persistent Notification ("Driving detected...")
     
     rect rgb(30, 40, 50)
         Note right of listener: Notification Received (Any Supported App)
-        listener->>listener: Intercept: WhatsApp, Telegram, Signal, Messenger, and SMS apps
+        listener->>listener: Intercept: WhatsApp, WhatsApp Business, Telegram, Telegram X, Signal, Messenger, SMS apps
+        listener->>listener: Verify NOT self-message (EXTRA_SELF_DISPLAY_NAME / MessagingStyle senderPerson)
         listener->>listener: Verify NOT group chat (unless override setting active)
-        listener->>listener: Check if Conversation already replied in this session
-        listener->>DB: Query custom template rules for Sender
+        listener->>listener: Check if Conversation already replied in session or within cooldown window
+        listener->>DB: Query custom template rules for Sender (case-insensitive)
         DB-->>listener: Returns matched rules list
-        listener->>listener: Match rules against Current Day & Time bounds
-        alt Rule Matched
+        listener->>listener: Match rules against Current Day & Time bounds (incl. overnight windows)
+        alt Rule Matched with Existing Template
             listener->>DB: Fetch rule's Template
         else No Rule Matched
             listener->>DB: Fetch active global Template
         end
         DB-->>listener: Returns target Template body
-        listener->>listener: Locate RemoteInput in Notification Actions
-        listener->>listener: Send Inline Reply via RemoteInput action PendingIntent
-        listener->>listener: Add Sender to repliedContacts Set
-        listener->>DB: Log sent reply (includes target packageName)
+        listener->>listener: Locate highest-scored RemoteInput Reply Action
+        listener->>Service: Mark conversation replied (atomic deduplication + cooldown)
+        listener->>listener: Send Inline Reply via RemoteInput (SOURCE_FREE_FORM_INPUT)
+        listener->>DB: Log sent reply & prune expired logs per retention policy
     end
 
     Sensors->>Recv: Broadcast: EXIT IN_VEHICLE
-    Note over Recv: Start 2-Minute Debounce Timer
+    Recv->>Service: Schedule 2-Minute Activity Exit Debounce Timer
     alt Debounce timer expires without vehicular ENTER re-trigger
-        Recv->>Service: Set DrivingState = False
-        Service->>Service: Update Notification ("Monitoring for driving...")
+        Service->>Service: Clear ACTIVITY_RECOGNITION trigger & re-evaluate DrivingState
+        Service->>Service: Update Notification ("Driving stopped — auto-reply paused")
     else Vehicular ENTER re-trigger occurs before 2 minutes
-        Note over Recv: Cancel Debounce Timer, remain Driving
+        Service->>Service: Cancel Debounce Timer, remain Driving
     end
 ```
 
@@ -66,54 +67,57 @@ sequenceDiagram
 ## 2. Core Service Components & Mechanics
 
 ### A. Foreground Service (`DriveReplyService.kt`)
-To survive aggressive system memory reclaim, the monitoring is bound to a foreground service utilizing the modern `specialUse` foreground type (mandated on Android 14+ for general coordination services).
-- **Foreground States**: Exposes a global companion `StateFlow<Boolean>` representing active driving state, plus a synchronized `MutableSet<String>` used for per-session deduplication keys.
-- **Manual Simulation Override**: Uses explicit state source (`AUTOMATIC` vs `MANUAL_SIMULATION`) to prevent automatic stop triggers from disabling manual simulation mode.
-- **GPS Speed Polling**: Employs `FusedLocationProviderClient` with low-power interval updates. Calculates real-time speed and transitions the app into driving mode if the calculated speed exceeds the user-configured speed threshold.
+To survive aggressive system memory reclaim, the monitoring is bound to a foreground service utilizing `specialUse|location` foreground service types (`FOREGROUND_SERVICE_TYPE_SPECIAL_USE` by default, adding `FOREGROUND_SERVICE_TYPE_LOCATION` when fine location permission is granted and GPS speed tracking is active).
+- **Foreground States**: Exposes a global companion `StateFlow<Boolean>` representing active driving state, backed by active trigger-source tracking (`ACTIVITY_RECOGNITION`, `BLUETOOTH`, `GPS_SPEED`, `MANUAL_SIMULATION`), plus a synchronized `ConcurrentHashMap` set and per-conversation cooldown map used for deduplication.
+- **Manual Simulation Override**: Uses explicit trigger source tracking (`MANUAL_SIMULATION` vs automatic triggers) to prevent automatic stop triggers from disabling manual simulation mode, and only clears session deduplication state when transitioning from not-driving (`false`) to driving (`true`).
+- **GPS Speed Polling & Exit Debounce**: Employs `FusedLocationProviderClient` with interval updates. Calculates real-time speed and transitions the app into driving mode if speed exceeds the user-configured threshold, using a 2-minute debounce before clearing driving state when speed drops or `IN_VEHICLE` exits.
 
 ### B. Bluetooth Pairing Trigger (`BluetoothReceiver.kt`)
 Listens to `BluetoothDevice.ACTION_ACL_CONNECTED` and `BluetoothDevice.ACTION_ACL_DISCONNECTED`.
-- **Match Mechanism**: Compares the connecting MAC address against a `StringSet` in `PreferencesManager` representing the user's selected "Car Bluetooth" devices.
-- **Trigger Actions**: Starts and forces `DriveReplyService` into the driving state upon match, and shuts down safely upon disconnection.
+- **Match Mechanism**: Verifies `isServiceEnabled` is active in `PreferencesManager`, then compares the connecting MAC address against the user's selected "Car Bluetooth" devices `StringSet`.
+- **Trigger Actions**: Starts `DriveReplyService` (with safe background start exception handling on Android 12+) and activates the `BLUETOOTH` driving trigger upon match, and clears the `BLUETOOTH` trigger state upon disconnection while leaving the monitoring service active if other triggers remain.
 
 ### C. Generalized Notification Listener (`WhatsAppNotificationListener.kt`)
 Extends `NotificationListenerService` to capture status bar notification updates across multiple communication platforms.
 - **Supported Packages**:
   - WhatsApp (`com.whatsapp`) & WhatsApp Business (`com.whatsapp.w4b`)
-  - Telegram (`org.telegram.messenger`)
+  - Telegram (`org.telegram.messenger`) & Telegram X (`org.thunderdog.challegram`)
   - Signal (`org.thoughtcrime.securesms`)
   - Facebook Messenger (`com.facebook.orca`)
   - Google Messages (`com.google.android.apps.messaging`)
   - Samsung Messages (`com.samsung.android.messaging`)
   - AOSP Messages (`com.android.messaging`)
-- **Platform-Agnostic Extraction**: Scans the notification `actions` array generically to locate `RemoteInput` with an editable result key, bypassing platform-specific structures to execute replies silently via:
+- **Platform-Agnostic Extraction**: Scans the notification `actions` and `WearableExtender(notification).actions` arrays, scores reply candidates by `SEMANTIC_ACTION_REPLY`, `allowGeneratedReplies`, and localized reply titles, and executes replies silently via:
   ```kotlin
-  val results = Bundle().apply {
-      putCharSequence(remoteInput.resultKey, templateBody)
+  val fillInIntent = Intent().apply {
+      val replyBundle = Bundle().apply {
+          remoteInputs.forEach { remoteInput ->
+              putCharSequence(remoteInput.resultKey, template.body)
+          }
+      }
+      RemoteInput.addResultsToIntent(replyAction.remoteInputs, this, replyBundle)
+      RemoteInput.setResultsSource(this, RemoteInput.SOURCE_FREE_FORM_INPUT)
   }
-  val intent = Intent().apply {
-      RemoteInput.addResultsToIntent(arrayOf(remoteInput), this, results)
-  }
-  action.actionIntent.send(context, 0, intent)
+  replyAction.actionIntent.send(this@WhatsAppNotificationListener, 0, fillInIntent)
   ```
-- **Conversation-Level Deduplication**: Dedupes by conversation identity (`package + tag` fallbacking to contact key) instead of raw contact text only.
-- **Self-Message Guard**: Ignores incoming notifications resolved as the account’s own display name.
+- **Conversation-Level Deduplication & Cooldown**: Dedupes by conversation identity (`package + tag`, falling back to conversation title or notification ID + contact key) and enforces a cross-session cooldown window to prevent rapid session-flap spam. Marks conversations atomically before sending and rolls back via `unmarkConversationReplied` if `PendingIntent.send` throws.
+- **Self-Message Guard**: Ignores incoming notifications resolved as the account’s own display name (`EXTRA_SELF_DISPLAY_NAME`) or where the latest `MessagingStyle.Message` has a null or self-matching `senderPerson`.
 - **Listener Health Signals**: Exposes listener connectivity state and logs lifecycle transitions (`created`, `connected`, `disconnected`, `destroyed`) for diagnostics.
 
 ### D. Dynamic Template Rule Matching
-When a message is received, `WhatsAppNotificationListener` consults `TemplateRuleDao` with the sender's contact name:
-1. Fetches all rules matching `contactName` or general catch-all rules.
-2. Checks day-of-week active rules (`1` = Monday to `7` = Sunday).
-3. Evaluates time window bounds (compares local milliseconds-since-midnight against `startTime` and `endTime` windows).
-4. Prioritizes specific contact rules over catch-all workday schedules.
+When a message is received, `WhatsAppNotificationListener` consults `TemplateRuleDao` with the sender's contact name (case-insensitive):
+1. Fetches all rules matching `contactName` (ignoring case/whitespace) or general catch-all rules (`contactName IS NULL`).
+2. Checks day-of-week active rules (`1` = Monday to `7` = Sunday) via `TemplateRule.matches(...)`.
+3. Evaluates time window bounds (compares local milliseconds-since-midnight against `startTime` and `endTime` windows, supporting both same-day and overnight windows where `startTime > endTime`).
+4. Prioritizes specific contact rules over catch-all schedule rules, selecting the first matching rule whose referenced `MessageTemplate` exists.
 5. If no rules match, falls back to the active global template.
 
 ---
 
-## 3. Database Architecture (Room DB)
+## 3. Database Architecture (Room DB — Schema v4)
 
 ### Entity: `message_templates`
-Stores reply message presets defined by the user.
+Stores reply message presets defined by the user. Prepopulated synchronously via SQLite `onCreate` with default `"Driving"` and `"Busy"` templates.
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
@@ -124,7 +128,7 @@ Stores reply message presets defined by the user.
 | `createdAt` | `INTEGER` | `NOT NULL` | Unix timestamp of creation |
 
 ### Entity: `reply_log`
-Chronological history of replies executed by the application.
+Chronological history of replies executed by the application (indexed on `timestamp`, pruned automatically per `logRetentionDays` and capped at 500 rows on UI queries).
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
@@ -133,16 +137,16 @@ Chronological history of replies executed by the application.
 | `templateName` | `TEXT` | `NOT NULL` | Name of template used for reply |
 | `messageSent` | `TEXT` | `NOT NULL` | Message body delivered to the recipient |
 | `packageName` | `TEXT` | `NOT NULL` | Target application package name (e.g., `com.whatsapp`) |
-| `timestamp` | `INTEGER` | `NOT NULL` | Unix timestamp of execution |
+| `timestamp` | `INTEGER` | `NOT NULL, INDEXED` | Unix timestamp of execution |
 
 ### Entity: `template_rules`
-Defines schedules and contact-specific routing mappings.
+Defines schedules and contact-specific routing mappings (indexed on `templateId` and `contactName`).
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
 | `id` | `TEXT` | `PRIMARY KEY` | Unique UUID string |
-| `templateId` | `TEXT` | `NOT NULL` | Foreign key matching `message_templates.id` |
-| `contactName` | `TEXT` | `NULLABLE` | Specific contact match (null acts as catch-all) |
+| `templateId` | `TEXT` | `NOT NULL, INDEXED` | Foreign key matching `message_templates.id` |
+| `contactName` | `TEXT` | `NULLABLE, INDEXED` | Specific contact match (null acts as catch-all) |
 | `daysOfWeek` | `TEXT` | `NULLABLE` | Comma-separated active days (e.g., `"1,2,3,4,5"`) |
 | `startTime` | `INTEGER` | `NULLABLE` | Start time window in milliseconds since midnight |
 | `endTime` | `INTEGER` | `NULLABLE` | End time window in milliseconds since midnight |
@@ -190,23 +194,22 @@ DriveReply also includes additional recovery safeguards:
 - ViewModel can trigger rebind recovery and logs each attempt for traceability.
 
 ### B. In-App Debug Logging
-DriveReply includes an internal debug log stream (`DebugEventLogger`) to simplify support and field diagnostics:
-- Runtime events are appended with timestamps (service state changes, listener events, reply decisions).
-- Settings screen exposes:
+DriveReply includes an internal opt-in debug log ring buffer (`DebugEventLogger`, bounded at 500 entries) to simplify support and field diagnostics while protecting user privacy:
+- Disabled by default (`debugLogsEnabled = false`); disabling automatically purges any buffered entries in memory.
+- Runtime events are appended with timestamps (service state changes, listener events, reply decisions) with PII redaction for contact identifiers.
+- Settings → Debugging exposes:
   - `Enable Debug Logs` toggle
-  - log viewer
-  - `Copy Logs` and `Clear Logs` actions
+  - log viewer and quick diagnostics snapshot generator
+  - `Copy Logs`, `Copy Snapshot`, and `Clear Logs` actions
 - This avoids mandatory ADB/logcat usage for most troubleshooting.
 
 ### C. GitHub Release Versioning & Update Checks
 DriveReply aligns application metadata and release tags:
-- CI generates release tags as `v1.0.<run_number>`.
+- CI generates release tags as `v2.0.<run_number>`.
 - APK metadata is set at build time with:
-  - `versionName = 1.0.<run_number>`
+  - `versionName = 2.0.<run_number>`
   - `versionCode = <run_number>`
-- Settings provides an in-app update flow that downloads the latest
-  APK from the GitHub release, verifies the signing certificate,
-  and hands off to the system package installer.
+- Settings → Updates & About provides an in-app update flow that queries the latest signed release from GitHub, streams the APK to a temporary `.apk.part` file in `cacheDir/updates/` (enforcing HTTPS, trusted GitHub hosts, and a 100 MB size cap), verifies package name, `longVersionCode`, and signing certificate match against the installed app, atomically renames to `.apk`, and hands off to the system package installer.
 
 #### Update Pipeline
 

@@ -2,8 +2,10 @@ package com.drivereply.app.util
 
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -11,16 +13,21 @@ import org.junit.Test
  * (no Android dependencies), so we can drive it directly from
  * `testDebugUnitTest`.
  *
- * Tests run with the default `enabled = true`; [setUpAndTearDown]
- * clears the buffer between tests.
+ * Production `enabled` defaults to `false` (opt-in diagnostic logging).
+ * [setUp] enables logging and clears the activation line so individual
+ * tests start with an empty buffer; [tearDown] resets `enabled = false`.
  */
 class DebugEventLoggerTest {
 
+    @Before
+    fun setUp() {
+        DebugEventLogger.setEnabled(true)
+        DebugEventLogger.clear()
+    }
+
     @After
     fun tearDown() {
-        // Defensive: make sure one failing test doesn't poison the
-        // next. `log` is the only entry point that creates lines, so
-        // clearing via the public API is sufficient.
+        DebugEventLogger.setEnabled(false)
         DebugEventLogger.clear()
     }
 
@@ -85,18 +92,38 @@ class DebugEventLoggerTest {
     }
 
     @Test
-    fun log_disabledByDefault_isRespected() {
-        // We don't toggle the global `enabled` flag in this test
-        // (it's process-wide shared state); instead verify the public
-        // contract: when `enabled` is true, `log()` records a line.
-        // (A separate manual toggle test would need a TestRule to
-        // reset the flag in @After; the existing `setEnabled(false)`
-        // path is exercised in the @After of the test suite for the
-        // prior codebase version, and the implementation only adds
-        // an early-return — behaviour is unchanged.)
-        DebugEventLogger.clear()
-        DebugEventLogger.log("Test", "before-toggle")
-        assertTrue(DebugEventLogger.entries.value.isNotEmpty())
+    fun setEnabled_false_clearsBufferAndSuppressesSubsequentLogs() {
+        DebugEventLogger.log("Test", "sensitive-event")
+        assertEquals(1, DebugEventLogger.entries.value.size)
+
+        DebugEventLogger.setEnabled(false)
+        assertFalse(DebugEventLogger.isEnabled())
+        assertTrue(DebugEventLogger.entries.value.isEmpty())
+
+        DebugEventLogger.log("Test", "should-be-dropped")
+        DebugEventLogger.d("Test", "debug-dropped")
+        DebugEventLogger.w("Test", "warn-dropped")
+        assertTrue(DebugEventLogger.entries.value.isEmpty())
+
+        DebugEventLogger.setEnabled(true)
+        assertTrue(DebugEventLogger.isEnabled())
+        assertEquals(1, DebugEventLogger.entries.value.size)
+        assertTrue(DebugEventLogger.entries.value.single().contains("Debug logging enabled"))
+    }
+
+    @Test
+    fun redact_masksSenderIdentityDeterministicallyWithoutLeakingRawValue() {
+        assertEquals("<redacted:empty>", DebugEventLogger.redact(null))
+        assertEquals("<redacted:empty>", DebugEventLogger.redact("   "))
+
+        val alice1 = DebugEventLogger.redact("Alice Smith")
+        val alice2 = DebugEventLogger.redact("  Alice Smith ")
+        val bob = DebugEventLogger.redact("Bob Jones")
+
+        assertEquals(alice1, alice2)
+        assertNotEquals(alice1, bob)
+        assertFalse(alice1.contains("Alice", ignoreCase = true))
+        assertTrue(alice1.startsWith("<redacted:#") && alice1.endsWith(">"))
     }
 
     @Test

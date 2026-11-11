@@ -8,46 +8,40 @@ This log tracks delivered work against the roadmap phases in `docs/ROADMAP.md`.
 
 ## Phase Status
 
-- Phase 1 (Reliability Lock): In progress (mostly delivered, pending broader device validation)
-- Phase 2 (UX Confidence Layer): In progress (major UX items delivered)
-- Phase 3 (Update + Release Robustness): In progress (core version/update fixes delivered)
-- Phase 4 (Quality Automation): Not started
+- Phase 1 (Reliability Lock): Delivered (multi-trigger state machine, self-message guard, conversation dedupe + cooldown, Android 12–15+ FGS compliance)
+- Phase 2 (UX Confidence Layer): Delivered (Settings subpages, ReadinessCard, custom template rules editor, onboarding detection-mode wiring)
+- Phase 3 (Update + Release Robustness): Delivered (`v2.0.<run_number>` migration to `com.drivereply.app`, in-app `ApkUpdateInstaller` with signature & downgrade verification, hardened CI/CD release pipeline)
+- Phase 4 (Quality Automation): Delivered (unit & instrumentation test suite covering rule matching, notification extraction/scoring, updater pipeline, debug logger, and CI quality gates)
 
 ## Delivered Milestones
 
 ### Reliability and Reply Flow
 
-- Expanded supported package detection for major messaging apps.
-- Hardened notification listener behavior and rebind recovery.
-- Added self-message guard and conversation-level dedupe for replies.
-- Improved decision-path logging (why reply sent/skipped).
-- Added listener health watchdog checks in foreground service.
+- Expanded supported package detection for 9 messaging apps (WhatsApp, WhatsApp Business, Telegram, Telegram X, Signal, Messenger, Google/Samsung/AOSP Messages).
+- Hardened notification listener behavior, delayed watchdog rebind recovery, and Android 14/15 `specialUse|location` foreground service compliance.
+- Added `MessagingStyle` + `EXTRA_SELF_DISPLAY_NAME` self-message guard, conversation-level dedupe, and cross-session cooldown for replies.
+- Centralized multi-trigger driving state (`ACTIVITY_RECOGNITION`, `BLUETOOTH`, `GPS_SPEED`, `MANUAL_SIMULATION`) and 2-minute exit debounce in `DriveReplyService`.
+- Upgraded Room DB to v4 with synchronous default template prepopulation, indexed queries, case-insensitive contact rule matching, and automatic log retention pruning.
 
 ### Diagnostics and Debugging
 
-- Added in-app debug log toggle, viewer, copy, and clear actions.
-- Added quick diagnostics snapshot export in Settings.
+- Added opt-in in-app debug log ring buffer (`MAX_ENTRIES = 500`, disabled by default for privacy, auto-cleared on disable) with PII redaction, viewer, copy, and clear actions.
+- Added quick diagnostics snapshot export in Settings → Debugging.
 - Added setup missing-requirements summary in Setup & Access.
 - Added Phase 1 reliability checklist (`docs/PHASE1_RELIABILITY_CHECKLIST.md`).
 
 ### UX and Information Architecture
 
-- Simplified Main screen to core runtime controls/status.
-- Moved setup/access/configuration complexity into Settings.
-- Split Settings into subpages:
-  - Setup & Access
-  - Preferences
-  - Automation
-  - Reliability
-  - Debugging
-  - Updates & About
-- Added setup progress summary and clearer permission state presentation.
+- Simplified Main screen to core runtime controls/status and extracted stateless `MainScreenContent` for UI testing.
+- Moved setup/access/configuration complexity into Settings (`Setup & Access`, `Preferences`, `Automation`, `Reliability`, `Debugging`, `Updates & About`).
+- Added schedule and contact-rule configuration in `EditTemplateScreen`.
+- Wired Onboarding detection mode selection (`ACTIVITY`, `BLUETOOTH`, `MANUAL`) and preserved UI state across configuration changes (`rememberSaveable`).
 
-### Versioning and Update Channel
+### Versioning, Security and Update Channel
 
-- Aligned version metadata with GitHub release versioning.
-- Added GitHub latest-release update check and direct update links.
-- Added compatibility handling to reduce false update prompts for legacy versions.
+- Migrated applicationId from `com.example.drivereply` to `com.drivereply.app` (`v2.0.<run_number>`).
+- Added seamless in-app `ApkUpdateInstaller` with HTTPS/host validation, `.apk.part` staging, package/versionCode verification, and signing certificate verification.
+- Hardened GitHub Actions `ci.yml` and `release.yml` with lint/unit test gates, sanitized `tag_suffix`, scoped token permissions, `SHA256SUMS.txt`, and SBOM submission.
 
 ## Recent Delivery Timeline (Latest First)
 

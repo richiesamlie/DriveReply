@@ -6,14 +6,11 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.util.UUID
 
 @Database(
     entities = [MessageTemplate::class, ReplyLogEntry::class, TemplateRule::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -49,6 +46,19 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_reply_log_timestamp` ON `reply_log` (`timestamp`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_template_rules_templateId` ON `template_rules` (`templateId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_template_rules_contactName` ON `template_rules` (`contactName`)"
+                )
+            }
+        }
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -63,7 +73,7 @@ abstract class AppDatabase : RoomDatabase() {
                 "drivereply.db"
             )
                 .addCallback(PrepopulateCallback())
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
         }
     }
@@ -71,26 +81,27 @@ abstract class AppDatabase : RoomDatabase() {
     private class PrepopulateCallback : Callback() {
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
-            INSTANCE?.let { database ->
-                CoroutineScope(Dispatchers.IO).launch {
-                    val dao = database.messageTemplateDao()
-                    dao.insert(
-                        MessageTemplate(
-                            id = UUID.randomUUID().toString(),
-                            name = "Driving",
-                            body = "I'm currently driving and can't respond. I'll get back to you when I'm safely stopped. \uD83D\uDE97",
-                            isActive = true
-                        )
-                    )
-                    dao.insert(
-                        MessageTemplate(
-                            id = UUID.randomUUID().toString(),
-                            name = "Busy",
-                            body = "I'm busy right now and can't reply. I'll get back to you soon."
-                        )
-                    )
-                }
-            }
+            val now = System.currentTimeMillis()
+            db.execSQL(
+                "INSERT OR IGNORE INTO `message_templates` (`id`, `name`, `body`, `isActive`, `createdAt`) VALUES (?, ?, ?, ?, ?)",
+                arrayOf<Any>(
+                    UUID.randomUUID().toString(),
+                    "Driving",
+                    "I'm currently driving and can't respond. I'll get back to you when I'm safely stopped. \uD83D\uDE97",
+                    1,
+                    now
+                )
+            )
+            db.execSQL(
+                "INSERT OR IGNORE INTO `message_templates` (`id`, `name`, `body`, `isActive`, `createdAt`) VALUES (?, ?, ?, ?, ?)",
+                arrayOf<Any>(
+                    UUID.randomUUID().toString(),
+                    "Busy",
+                    "I'm busy right now and can't reply. I'll get back to you soon.",
+                    0,
+                    now + 1L
+                )
+            )
         }
     }
 }

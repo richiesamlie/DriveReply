@@ -26,45 +26,45 @@ The app is **functionally sound** (auto-reply engine, dedupe, listener recovery 
 
 | ID | Sev | Issue | File | Fix |
 |----|----:|-------|------|-----|
-| **B-01** | **CRITICAL** | **App icon is the default Android Studio placeholder** (green Android robot on green grid). The README positions the app as "premium, high-performance" but the launcher is the template. | `app/src/main/res/mipmap-*`, `drawable/ic_launcher_foreground.xml` | Replace foreground/background drawables + regenerate mipmaps. See §3. |
-| **B-02** | **HIGH** | **Update flow is not seamless** — `SettingsUpdatesAbout` only opens the release page in the browser via `Intent.ACTION_VIEW`. User must: leave app → download APK → grant "install unknown apps" to browser → confirm install → relaunch. | `ui/settings/SettingsScreen.kt:670-677`, `util/GitHubReleaseChecker.kt` | Implement in-app downloader (OkHttp + progress notification), write to `cacheDir/updates/`, expose via `FileProvider`, launch `ACTION_INSTALL_PACKAGE`. See §3. |
-| B-03 | MED | Settings "About" shows raw `v1.0.<n>` without a friendly "Up to date" / "Update available" badge. | `SettingsScreen.kt:678` | Cosmetic, address with B-02. |
+| **B-01** | **CRITICAL** | ~~App icon is the default Android Studio placeholder.~~ **Resolved:** Replaced adaptive icon foreground/background drawables (`ic_launcher_foreground.xml`, `ic_launcher_background.xml`) and regenerated density mipmaps. | `app/src/main/res/mipmap-*`, `drawable/ic_launcher_foreground.xml` | Completed. |
+| **B-02** | **HIGH** | ~~Update flow is not seamless.~~ **Resolved:** Implemented in-app `ApkUpdateInstaller` with progress bar, system progress notification, `FileProvider`, signature/version verification, and `ACTION_INSTALL_PACKAGE` handoff. | `ui/settings/SettingsScreen.kt`, `util/ApkUpdateInstaller.kt` | Completed. |
+| B-03 | MED | ~~Settings "About" shows raw `v1.0.<n>` without friendly status.~~ **Resolved:** Shows `v2.0.<n>` and localized status messages via `R.string.updates_*`. | `SettingsScreen.kt` | Completed. |
 
 ### 2.2 Security
 
 | ID | Sev | Issue | File | Recommendation |
 |----|----:|-------|------|----------------|
-| S-01 | HIGH | `android:allowBackup="true"` will sync `message_templates`, `template_rules`, and `reply_log` to Google cloud backup. Reply logs can contain sensitive content. | `AndroidManifest.xml:40` + `res/xml/backup_rules.xml`, `data_extraction_rules.xml` | Set `allowBackup="false"` *or* explicitly exclude `datastore/`, `databases/` in `data_extraction_rules.xml`. |
-| S-02 | HIGH | The release CI **attaches an unsigned APK** if no keystore is configured, but the in-app `GitHubReleaseChecker` is willing to recommend it as the "Download APK" because it filters only by `-release.apk` filename, not signature. A user could install a tampered build via the official updater path. | `.github/workflows/release.yml:53-57`, `GitHubReleaseChecker.kt:51-58` | (a) In CI, **fail the job** if `RELEASE_KEYSTORE_PATH` is missing on `main` rather than attaching an unsigned APK. (b) On the client, after download, compare the downloaded APK's signing certificate (PackageInfo.signatures / SigningInfo) against the installed app's certificate before allowing install. |
-| S-03 | MED | `WhatsAppNotificationListener` is `exported="true"` — required because `BIND_NOTIFICATION_LISTENER_SERVICE` is a system-only permission, but no extra hardening. | `AndroidManifest.xml:64-71` | Acceptable. The system-only `permission` attribute is the correct protection. Document this in `ARCHITECTURE.md`. |
-| S-04 | MED | `BluetoothReceiver` and `BootReceiver` are `exported="true"` — required for system broadcasts. No `android:permission` guard. | `AndroidManifest.xml:79-96` | Acceptable for `BOOT_COMPLETED` and `ACL_CONNECTED` (system-sender only). Document. |
-| S-05 | MED | `DebugEventLogger` is held in-memory and exposed in Settings, but no log size cap. Long sessions can grow unboundedly and degrade UI rendering. | `util/DebugEventLogger.kt` (not read) | Add `MAX_ENTRIES = 500` cap + eviction. |
-| S-06 | MED | ~~Package name `com.example.drivereply` is in the `com.example.*` reserved namespace.~~ **Resolved in v2.0.0 (PR #6):** migrated to `com.drivereply.app`. The Play-blocking issue is gone. Migration is breaking: users on v1.x must uninstall the old build first. | n/a | n/a |
-| S-07 | LOW | No `networkSecurityConfig` — `INTERNET` permission is held, all cleartext is blocked by default on API 28+, but explicit config makes intent clear. | `AndroidManifest.xml` | Optional: add `network_security_config.xml` pinning `api.github.com`. |
+| S-01 | HIGH | ~~`android:allowBackup="true"` will sync `message_templates`, `template_rules`, and `reply_log` to Google cloud backup.~~ **Resolved:** `backup_rules.xml` and `data_extraction_rules.xml` explicitly exclude `database` (`drivereply.db`) and `datastore` (`drivereply_prefs.preferences_pb`) from cloud backup and device transfer. | `AndroidManifest.xml` + `res/xml/backup_rules.xml`, `data_extraction_rules.xml` | Completed. |
+| S-02 | HIGH | ~~The release CI attaches an unsigned APK if no keystore is configured, and `GitHubReleaseChecker` can select non-release APKs.~~ **Resolved:** `release.yml` validates all 4 signing secrets on `main` and only publishes signed release APKs; `GitHubReleaseChecker` strictly filters for signed `-release.apk` assets over HTTPS; `ApkUpdateInstaller` enforces HTTPS/GitHub host allowlisting, 100 MB stream cap, `.apk.part` staging, `longVersionCode` downgrade check, and multi-signer/rotation-safe certificate verification. | `.github/workflows/release.yml`, `GitHubReleaseChecker.kt`, `ApkUpdateInstaller.kt` | Completed. |
+| S-03 | MED | `WhatsAppNotificationListener` is `exported="true"` — required because `BIND_NOTIFICATION_LISTENER_SERVICE` is a system-only permission. | `AndroidManifest.xml` | Acceptable. Protected by system-only `BIND_NOTIFICATION_LISTENER_SERVICE`. |
+| S-04 | MED | `BluetoothReceiver` and `BootReceiver` are `exported="true"` — required for system broadcasts. | `AndroidManifest.xml` | Acceptable for `BOOT_COMPLETED` and `ACL_CONNECTED`/`ACL_DISCONNECTED` (protected system broadcasts). |
+| S-05 | MED | ~~`DebugEventLogger` is held in-memory without a size cap or opt-in privacy default.~~ **Resolved:** `MAX_ENTRIES = 500` ring buffer implemented, default changed to `enabled = false` (`debugLogsEnabled = false`), buffer cleared on disable, and PII redacted. | `util/DebugEventLogger.kt`, `data/PreferencesManager.kt` | Completed. |
+| S-06 | MED | ~~Package name `com.example.drivereply` is in the `com.example.*` reserved namespace.~~ **Resolved in v2.0.0 (PR #6):** migrated to `com.drivereply.app`. | `app/build.gradle.kts` | Completed. |
+| S-07 | LOW | No `networkSecurityConfig` — `INTERNET` permission is held, all cleartext is blocked by default on API 28+, and `ApkUpdateInstaller` + `GitHubReleaseChecker` explicitly enforce `https://` and trusted GitHub hosts. | `AndroidManifest.xml`, `util/ApkUpdateInstaller.kt` | Enforced in transport layer. |
 | S-08 | LOW | JSON parsing in `GitHubReleaseChecker` uses `org.json.JSONObject` — fine for trusted GitHub response, no injection vector. | `util/GitHubReleaseChecker.kt` | No action. |
-| S-09 | LOW | `HttpURLConnection` with 10s timeouts — adequate. No certificate pinning, acceptable for public GitHub API. | `util/GitHubReleaseChecker.kt` | No action. |
+| S-09 | LOW | `HttpURLConnection` with timeouts and HTTPS/host validation. | `util/GitHubReleaseChecker.kt`, `util/ApkUpdateInstaller.kt` | Completed. |
 
 ### 2.3 Build / CI
 
 | ID | Sev | Issue | File | Fix |
 |----|----:|-------|------|-----|
-| C-01 | HIGH | **CI does not run tests or lint.** A green CI run only means "it compiled". Regressions can ship. | `.github/workflows/release.yml:39-40` | Add `./gradlew lint test` as a separate `test` job, gate release on its success. |
-| C-02 | HIGH | **No dependency vulnerability scanning** in CI. | release.yml | Add `gradle/actions/dependency-submission` (dependency graph) + a scheduled OWASP/`dependency-check` job. |
-| C-03 | MED | `softprops/action-gh-release@v2` — pinned major only. Use a SHA or latest minor for supply-chain hygiene. | `release.yml:60` | Bump to `@v2.3.x` or pin SHA. |
-| C-04 | MED | Release workflow runs on every `push` to `main` — no manual gate, no dry-run for tagged releases. | `release.yml:4-7` | Add `workflow_dispatch` input + only create release on tag pushes (`v*`). Keep `assembleDebug` on every push. |
-| C-05 | MED | APK names embed `${{ github.run_number }}` — fine, but no SHA256 manifest attached. Users have no way to verify integrity. | `release.yml:49-57` | Emit `SHA256SUMS.txt` and append to release notes. |
-| C-06 | LOW | No `pull_request` workflow — PRs don't get a build verification. | release.yml | Add `pull_request.yml` running `lint test assembleDebug`. |
+| C-01 | HIGH | ~~CI does not run tests or lint.~~ **Resolved:** `quality-gate` job in `release.yml` and `ci.yml` run `lintDebug` and `testDebugUnitTest`. | `.github/workflows/release.yml`, `.github/workflows/ci.yml` | Completed. |
+| C-02 | HIGH | ~~No dependency vulnerability scanning in CI.~~ **Resolved:** `gradle/actions/dependency-submission@v3` publishes the dependency graph (SBOM). | `.github/workflows/release.yml` | Completed. |
+| C-03 | MED | `softprops/action-gh-release@v2` and workflow permissions hardened (`contents: read` at top level, `contents: write` scoped to `build-and-release`, `tag_suffix` sanitized via `env:`, keystore written to `$RUNNER_TEMP` and shredded in `if: always()`). | `.github/workflows/release.yml` | Completed. |
+| C-04 | MED | `workflow_dispatch` with sanitized `tag_suffix` supported alongside `main` pushes. | `.github/workflows/release.yml` | Completed. |
+| C-05 | MED | ~~No SHA256 manifest attached.~~ **Resolved:** `SHA256SUMS.txt` generated and attached to releases. | `.github/workflows/release.yml` | Completed. |
+| C-06 | LOW | ~~No `pull_request` workflow.~~ **Resolved:** `.github/workflows/ci.yml` runs on PRs to `main` and `develop`. | `.github/workflows/ci.yml` | Completed. |
 
 ### 2.4 Code Quality
 
 | ID | Sev | Issue | Recommendation |
 |----|----:|-------|----------------|
-| Q-01 | HIGH | `BluetoothReceiver.kt:72,82` and `ActivityTransitionReceiver.kt:68` call `context.startService(...)` to update a notification. On Android 12+ (API 31+), `startService` from a background context is restricted to a few exempt cases. Currently works because the service is already foreground, but brittle. | Use a `LocalBroadcastManager` (deprecated) or, preferably, expose a `BroadcastReceiver` in the service for in-process updates, or use a `MutableStateFlow` collected by the service. |
-| Q-02 | MED | `WhatsAppNotificationListener` is misnamed — it handles Telegram, Signal, Messenger, SMS in addition to WhatsApp. | Rename to `AutoReplyNotificationListener`. (Breaking change; can wait.) |
-| Q-03 | MED | Test suite is 3 files (only data classes, no service/listener/flow tests). | Add unit tests for `GitHubReleaseChecker`, `DriveReplyService.setDrivingState` debounce logic, and `WhatsAppNotificationListener` template extraction. |
-| Q-04 | MED | `BuildConfig` is disabled (`buildConfig = false`), so debug toggles cannot be compile-time gated. | Enable `buildConfig = true` if you want debug flags. Otherwise no action. |
-| Q-05 | LOW | `app/proguard-rules.pro` is empty — relies entirely on consumer rules from libraries. Verify release APK with `apkanalyzer` after first signed build to confirm `DriveReplyApplication` and Room schemas survive R8. | Add a smoke check to CI. |
-| Q-06 | LOW | `_manualSimulationOverride` is read in `setDrivingState` without `@Volatile`; only the write path mutates it. MutableStateFlow handles visibility, so this is safe — but the field type is `MutableStateFlow<Boolean>` not `volatile var`. | No action; just clarifying. |
+| Q-01 | HIGH | ~~Receivers call `context.startService(...)` to update a notification.~~ **Resolved:** `DriveReplyService.notificationText` `StateFlow` updates the notification in-process, `DriveReplyService.start()` catches `ForegroundServiceStartNotAllowedException`, and `BluetoothReceiver` checks `isServiceEnabled` before starting the service. | Completed. |
+| Q-02 | MED | `WhatsAppNotificationListener` handles all 9 supported messaging apps (WhatsApp, WhatsApp Business, Telegram, Telegram X, Signal, Messenger, Google/Samsung/AOSP Messages). | Retained class name for manifest compatibility so existing users do not lose notification listener grant across updates. |
+| Q-03 | MED | ~~Test suite is 3 files.~~ **Resolved:** Expanded unit and instrumentation tests covering `TemplateRule.matches` (including overnight windows), `WhatsAppNotificationListener` extraction/scoring/dedupe, `ApkUpdateInstaller` download/verification pipeline, `DebugEventLogger`, `GitHubReleaseChecker`, and stateless `MainScreenContent`. | Completed. |
+| Q-04 | MED | `BuildConfig` is disabled (`buildConfig = false`); `DebugEventLogger` is gated by user opt-in (`enabled = false` by default). | Completed. |
+| Q-05 | LOW | ~~`app/proguard-rules.pro` is empty.~~ **Resolved:** Added explicit R8 keep rules for `@kotlinx.serialization.Serializable` and `NavKey` navigation destinations. | Completed. |
+| Q-06 | LOW | Driving trigger sources (`ACTIVITY_RECOGNITION`, `BLUETOOTH`, `GPS_SPEED`, `MANUAL_SIMULATION`) and 2-minute exit debounce centralized in `DriveReplyService`. | Completed. |
 
 ---
 

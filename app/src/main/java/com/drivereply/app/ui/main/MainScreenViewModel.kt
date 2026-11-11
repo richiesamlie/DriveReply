@@ -12,6 +12,7 @@ import com.drivereply.app.service.SupportedMessagingPackages
 import com.drivereply.app.service.WhatsAppNotificationListener
 import com.drivereply.app.util.DebugEventLogger
 import com.drivereply.app.util.PermissionHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 data class MainUiState(
@@ -131,31 +133,35 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
 
     fun refreshPermissions() {
         val context = getApplication<Application>()
-        val snapshot = PermissionSnapshot(
-            activityRecognition = PermissionHelper.hasActivityRecognitionPermission(context),
-            notificationListener = PermissionHelper.hasNotificationListenerPermission(context),
-            notification = PermissionHelper.hasNotificationPermission(context),
-            batteryOptimized = PermissionHelper.isBatteryOptimizationExempt(context),
-            bluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(context),
-            fineLocation = PermissionHelper.hasFineLocationPermission(context),
-            backgroundLocation = PermissionHelper.hasBackgroundLocationPermission(context),
-            supportedAppDetections = detectSupportedApps(context),
-        )
-        _permissionState.value = snapshot
-        val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
-        val appDetectionSummary = snapshot.supportedAppDetections.joinToString(",") {
-            "${it.label}=${it.isInstalled}"
-        }
-        DebugEventLogger.log(
-            TAG,
-            "Permission refresh listenerGranted=${snapshot.notificationListener}, " +
-                "listenerConnected=$listenerConnected, " +
-                "serviceEnabled=${uiState.value.isServiceEnabled}, driving=${uiState.value.isDriving}, " +
-                "supportedApps=$appDetectionSummary"
-        )
+        viewModelScope.launch {
+            val snapshot = withContext(Dispatchers.IO) {
+                PermissionSnapshot(
+                    activityRecognition = PermissionHelper.hasActivityRecognitionPermission(context),
+                    notificationListener = PermissionHelper.hasNotificationListenerPermission(context),
+                    notification = PermissionHelper.hasNotificationPermission(context),
+                    batteryOptimized = PermissionHelper.isBatteryOptimizationExempt(context),
+                    bluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(context),
+                    fineLocation = PermissionHelper.hasFineLocationPermission(context),
+                    backgroundLocation = PermissionHelper.hasBackgroundLocationPermission(context),
+                    supportedAppDetections = detectSupportedApps(context),
+                )
+            }
+            _permissionState.value = snapshot
+            val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
+            val appDetectionSummary = snapshot.supportedAppDetections.joinToString(",") {
+                "${it.label}=${it.isInstalled}"
+            }
+            DebugEventLogger.log(
+                TAG,
+                "Permission refresh listenerGranted=${snapshot.notificationListener}, " +
+                    "listenerConnected=$listenerConnected, " +
+                    "serviceEnabled=${uiState.value.isServiceEnabled}, driving=${uiState.value.isDriving}, " +
+                    "supportedApps=$appDetectionSummary"
+            )
 
-        if (snapshot.notificationListener && !listenerConnected) {
-            attemptNotificationListenerRebind(manual = false)
+            if (snapshot.notificationListener && !listenerConnected) {
+                attemptNotificationListenerRebind(manual = false)
+            }
         }
     }
 

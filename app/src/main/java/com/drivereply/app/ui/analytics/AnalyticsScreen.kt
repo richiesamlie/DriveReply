@@ -5,17 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -23,6 +19,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.drivereply.app.data.ReplyLogEntry
+import com.drivereply.app.service.SupportedMessagingPackages
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,7 +70,7 @@ fun AnalyticsContent(
     modifier: Modifier = Modifier
 ) {
     val totalReplies = logs.size
-    val uniqueContacts = logs.map { it.contactName }.distinct().size
+    val uniqueContacts = remember(logs) { logs.asSequence().map { it.contactName }.distinct().count() }
 
     LazyColumn(
         modifier = modifier
@@ -128,7 +125,7 @@ fun AnalyticsContent(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    if (weeklyData.isNotEmpty()) {
+                    if (weeklyData.any { it.second > 0 }) {
                         SplineChart(data = weeklyData)
                     } else {
                         Box(
@@ -245,9 +242,10 @@ fun SplineChart(
     modifier: Modifier = Modifier
 ) {
     val maxVal = remember(data) { (data.maxOfOrNull { it.second } ?: 0).coerceAtLeast(5) }
-    val density = LocalDensity.current
     val primaryColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.outlineVariant
+    val path = remember { Path() }
+    val fillPath = remember { Path() }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Box(
@@ -280,16 +278,17 @@ fun SplineChart(
                 }
 
                 // Prepare Spline coordinates
+                val stepDivisor = (data.size - 1).coerceAtLeast(1).toFloat()
                 val points = data.mapIndexed { idx, pair ->
-                    val x = paddingLeft + (idx.toFloat() / 6f) * chartWidth
+                    val x = paddingLeft + (idx.toFloat() / stepDivisor) * chartWidth
                     val y = paddingTop + chartHeight - (pair.second.toFloat() / maxVal) * chartHeight
                     Offset(x, y)
                 }
 
                 // Draw Spline Line and Gradient Area
                 if (points.isNotEmpty()) {
-                    val path = Path()
-                    val fillPath = Path()
+                    path.reset()
+                    fillPath.reset()
 
                     path.moveTo(points.first().x, points.first().y)
                     fillPath.moveTo(points.first().x, paddingTop + chartHeight)
@@ -366,37 +365,43 @@ fun SplineChart(
     }
 }
 
+private val PACKAGE_COLORS = mapOf(
+    "com.whatsapp" to Color(0xFF25D366),
+    "com.whatsapp.w4b" to Color(0xFF128C7E),
+    "org.telegram.messenger" to Color(0xFF0088CC),
+    "org.thunderdog.challegram" to Color(0xFF29B6F6),
+    "org.thoughtcrime.securesms" to Color(0xFF3A76F0),
+    "com.facebook.orca" to Color(0xFFA200FF),
+    "com.google.android.apps.messaging" to Color(0xFF1A73E8),
+    "com.samsung.android.messaging" to Color(0xFF0072DE),
+    "com.android.messaging" to Color(0xFF4CAF50)
+)
+
+private val FALLBACK_COLORS = listOf(
+    Color(0xFF26A69A),
+    Color(0xFFFFA000),
+    Color(0xFF7E57C2),
+    Color(0xFF9E9E9E)
+)
+
 @Composable
 fun DonutChart(
     distribution: Map<String, Int>,
     totalCount: Int,
     modifier: Modifier = Modifier
 ) {
-    // Curated Harmonious Palette for App Distribution
-    val colors = listOf(
-        Color(0xFF25D366), // WhatsApp (Vibrant green)
-        Color(0xFF0088CC), // Telegram (Sky Blue)
-        Color(0xFF3A76F0), // Signal (Royal Blue)
-        Color(0xFFA200FF), // Messenger (Vibrant Purple)
-        Color(0xFF9E9E9E)  // Other (Warm Gray)
-    )
+    val appNames = remember {
+        SupportedMessagingPackages.supportedApps.associate { it.packageName to it.label }
+    }
 
-    val appNames = mapOf(
-        "com.whatsapp" to "WhatsApp",
-        "com.whatsapp.w4b" to "WhatsApp Business",
-        "org.telegram.messenger" to "Telegram",
-        "org.thoughtcrime.securesms" to "Signal",
-        "com.facebook.orca" to "Messenger"
-    )
-
-    val sliceList = remember(distribution) {
+    val sliceList = remember(distribution, totalCount) {
         var runningAngle = 0f
         distribution.entries.sortedByDescending { it.value }.mapIndexed { index, entry ->
-            val angle = (entry.value.toFloat() / totalCount) * 360f
-            val color = colors[index % colors.size]
+            val angle = if (totalCount > 0) (entry.value.toFloat() / totalCount) * 360f else 0f
+            val color = PACKAGE_COLORS[entry.key] ?: FALLBACK_COLORS[index % FALLBACK_COLORS.size]
             val segment = DonutSegment(
                 packageName = entry.key,
-                appName = appNames[entry.key] ?: "Other App",
+                appName = appNames[entry.key] ?: entry.key,
                 count = entry.value,
                 startAngle = runningAngle,
                 sweepAngle = angle,

@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.drivereply.app.DriveReplyApplication
+import com.drivereply.app.R
 import com.drivereply.app.service.SupportedMessagingPackages
 import com.drivereply.app.service.WhatsAppNotificationListener
 import com.drivereply.app.service.DriveReplyService
@@ -14,6 +15,7 @@ import com.drivereply.app.util.ApkUpdateInstaller
 import com.drivereply.app.util.DebugEventLogger
 import com.drivereply.app.util.GitHubReleaseChecker
 import com.drivereply.app.util.PermissionHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -38,13 +41,17 @@ data class UpdateCheckUiState(
     val message: String? = null,
     // In-app update flow (Phase 2).
     val isDownloading: Boolean = false,
+    val isVerifying: Boolean = false,
     val downloadPercent: Int = 0,
-    val downloadedApk: java.io.File? = null,
+    val downloadedApk: File? = null,
     val downloadError: String? = null,
     val certificateSha256: String? = null,
 ) {
     val canStartDownload: Boolean
-        get() = hasUpdate && !isDownloading && !downloadUrl.isNullOrBlank() && downloadedApk == null
+        get() = hasUpdate && !isDownloading && !isVerifying && !downloadUrl.isNullOrBlank() && downloadedApk == null
+
+    val canInstallDownloaded: Boolean
+        get() = !isDownloading && !isVerifying && downloadedApk != null
 }
 
 data class SettingsSupportedAppDetection(
@@ -69,6 +76,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val app = application as DriveReplyApplication
     private val preferencesManager = app.preferencesManager
+    private val replyLogDao = app.database.replyLogDao()
     private val apkInstaller = ApkUpdateInstaller(app)
     private var downloadJob: Job? = null
     private val _updateCheckState = MutableStateFlow(
@@ -77,8 +85,17 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         )
     )
     private val _setupState = MutableStateFlow(SetupState())
+    private val _pairedBluetoothDevices = MutableStateFlow<List<Pair<String, String>>>(emptyList())
     val updateCheckState: StateFlow<UpdateCheckUiState> = _updateCheckState.asStateFlow()
     val setupState: StateFlow<SetupState> = _setupState.asStateFlow()
+    val pairedBluetoothDevices: StateFlow<List<Pair<String, String>>> = _pairedBluetoothDevices.asStateFlow()
+
+    val isServiceEnabled: StateFlow<Boolean> = preferencesManager.isServiceEnabled
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = false
+        )
 
     val replyInGroupChats: StateFlow<Boolean> = preferencesManager.replyInGroupChats
         .stateIn(
@@ -112,7 +129,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = true
+            initialValue = false
         )
 
     val debugLogText: StateFlow<String> = DebugEventLogger.entries
@@ -140,6 +157,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setLogRetentionDays(days: Int) {
         viewModelScope.launch {
             preferencesManager.setLogRetentionDays(days)
+            if (days > 0) {
+                val threshold = System.currentTimeMillis() - (days.toLong() * 24L * 60L * 60L * 1_000L)
+                replyLogDao.deleteOlderThan(threshold)
+            }
         }
     }
 
@@ -168,6 +189,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun getPairedBluetoothDevices(): List<Pair<String, String>> {
+        if (!PermissionHelper.hasBluetoothConnectPermission(app)) return emptyList()
         val bluetoothManager = app.getSystemService(Application.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = bluetoothManager?.adapter ?: return emptyList()
         return try {
@@ -182,18 +204,26 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshSetupState() {
-        val supportedApps = detectSupportedApps()
-        _setupState.value = SetupState(
-            hasActivityRecognition = PermissionHelper.hasActivityRecognitionPermission(app),
-            hasNotificationListener = PermissionHelper.hasNotificationListenerPermission(app),
-            isNotificationListenerConnected = WhatsAppNotificationListener.isListenerConnected.value,
-            hasNotificationPermission = PermissionHelper.hasNotificationPermission(app),
-            isBatteryOptimizationExempt = PermissionHelper.isBatteryOptimizationExempt(app),
-            hasBluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(app),
-            hasFineLocation = PermissionHelper.hasFineLocationPermission(app),
-            hasBackgroundLocation = PermissionHelper.hasBackgroundLocationPermission(app),
-            supportedApps = supportedApps
-        )
+        viewModelScope.launch {
+            val (nextSetup, paired) = withContext(Dispatchers.IO) {
+                val supportedApps = detectSupportedApps()
+                val setup = SetupState(
+                    hasActivityRecognition = PermissionHelper.hasActivityRecognitionPermission(app),
+                    hasNotificationListener = PermissionHelper.hasNotificationListenerPermission(app),
+                    isNotificationListenerConnected = WhatsAppNotificationListener.isListenerConnected.value,
+                    hasNotificationPermission = PermissionHelper.hasNotificationPermission(app),
+                    isBatteryOptimizationExempt = PermissionHelper.isBatteryOptimizationExempt(app),
+                    hasBluetoothConnect = PermissionHelper.hasBluetoothConnectPermission(app),
+                    hasFineLocation = PermissionHelper.hasFineLocationPermission(app),
+                    hasBackgroundLocation = PermissionHelper.hasBackgroundLocationPermission(app),
+                    supportedApps = supportedApps
+                )
+                val bonded = getPairedBluetoothDevices()
+                setup to bonded
+            }
+            _setupState.value = nextSetup
+            _pairedBluetoothDevices.value = paired
+        }
     }
 
     fun setDebugLogsEnabled(enabled: Boolean) {
@@ -203,6 +233,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setManualDrivingSimulation(enabled: Boolean) {
+        if (!isServiceEnabled.value && enabled) return
         DriveReplyService.setDrivingState(
             enabled,
             DriveReplyService.DrivingStateSource.MANUAL_SIMULATION
@@ -230,16 +261,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         downloadUrl = update.apkDownloadUrl,
                         releaseUrl = update.releaseUrl,
                         message = if (update.hasUpdate) {
-                            "New version available."
+                            app.getString(R.string.updates_status_update_available)
                         } else {
-                            "You are on the latest version."
+                            app.getString(R.string.updates_status_up_to_date)
                         }
                     )
                 },
                 onFailure = { error ->
                     _updateCheckState.value = _updateCheckState.value.copy(
                         isChecking = false,
-                        message = "Update check failed: ${error.message ?: "Unknown error"}"
+                        message = app.getString(
+                            R.string.updates_status_check_failed,
+                            error.message ?: "Unknown error"
+                        )
                     )
                 }
             )
@@ -261,6 +295,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         downloadJob = viewModelScope.launch {
             _updateCheckState.value = _updateCheckState.value.copy(
                 isDownloading = true,
+                isVerifying = false,
                 downloadPercent = 0,
                 downloadError = null,
                 downloadedApk = null,
@@ -278,6 +313,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     }
                     is ApkUpdateInstaller.UpdateEvent.Verifying -> {
                         DebugEventLogger.log("Updates", "Verifying signature of ${event.target.name}")
+                        _updateCheckState.value = _updateCheckState.value.copy(
+                            isVerifying = true
+                        )
                     }
                     is ApkUpdateInstaller.UpdateEvent.Ready -> {
                         DebugEventLogger.log(
@@ -286,6 +324,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         )
                         _updateCheckState.value = _updateCheckState.value.copy(
                             isDownloading = false,
+                            isVerifying = false,
                             downloadedApk = event.target,
                             certificateSha256 = event.certificateSha256,
                         )
@@ -301,11 +340,27 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                         DebugEventLogger.log("Updates", "Download failed: ${event.error.message}")
                         _updateCheckState.value = _updateCheckState.value.copy(
                             isDownloading = false,
+                            isVerifying = false,
                             downloadError = event.error.message
                         )
                     }
                 }
             }
+        }
+    }
+
+    fun installDownloadedApk() {
+        val apk = _updateCheckState.value.downloadedApk ?: return
+        if (!apk.exists()) {
+            _updateCheckState.value = _updateCheckState.value.copy(downloadedApk = null)
+            startDownloadAndInstall()
+            return
+        }
+        val result = apkInstaller.launchInstaller(apk)
+        result.onFailure { err ->
+            _updateCheckState.value = _updateCheckState.value.copy(
+                downloadError = err.message ?: "Could not launch installer"
+            )
         }
     }
 
@@ -315,6 +370,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         downloadJob = null
         _updateCheckState.value = _updateCheckState.value.copy(
             isDownloading = false,
+            isVerifying = false,
             downloadPercent = 0,
         )
     }
@@ -375,12 +431,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 app.packageManager.getPackageInfo(app.packageName, 0)
             }
             val versionName = (packageInfo.versionName ?: "0.0").removePrefix("v").removePrefix("V")
-            val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                packageInfo.longVersionCode
-            } else {
-                @Suppress("DEPRECATION")
-                packageInfo.versionCode.toLong()
-            }
+            val versionCode = packageInfo.longVersionCode
             val segments = versionName.split('.').filter { it.isNotBlank() }
             if (segments.size >= 3) {
                 "v$versionName"

@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 
 data class UpdateCheckResult(
@@ -17,6 +18,12 @@ object GitHubReleaseChecker {
     private const val LATEST_RELEASE_API =
         "https://api.github.com/repos/richiesamlie/DriveReply/releases/latest"
     private const val LEGACY_STATIC_METADATA_LAST_TAG_PATCH = 19
+    private val ALLOWED_DOWNLOAD_HOSTS = setOf(
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "api.github.com"
+    )
 
     suspend fun checkForUpdates(installedTag: String): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
         runCatching {
@@ -33,44 +40,72 @@ object GitHubReleaseChecker {
                 }
 
                 val body = connection.inputStream.bufferedReader().use { it.readText() }
-                val json = JSONObject(body)
-                val latestTag = json.optString("tag_name", "").ifBlank {
-                    throw IllegalStateException("Missing release tag_name")
-                }
-                val releaseUrl = json.optString("html_url", "").ifBlank {
-                    "https://github.com/richiesamlie/DriveReply/releases"
-                }
-
-                val assets = json.optJSONArray("assets")
-                var apkDownloadUrl: String? = null
-                if (assets != null) {
-                    for (i in 0 until assets.length()) {
-                        val asset = assets.optJSONObject(i) ?: continue
-                        val name = asset.optString("name")
-                        val candidateUrl = asset.optString("browser_download_url")
-                        if (name.endsWith(".apk", ignoreCase = true) && candidateUrl.isNotBlank()) {
-                            if (apkDownloadUrl == null ||
-                                (name.contains("-release.apk", ignoreCase = true) &&
-                                    !name.contains("unsigned", ignoreCase = true))
-                            ) {
-                                apkDownloadUrl = candidateUrl
-                            }
-                        }
-                    }
-                }
-
-                val hasUpdateByTag = compareVersionTags(latestTag, installedTag) > 0
-                val suppressLegacyFalsePositive = shouldSuppressLegacyFalsePositive(installedTag, latestTag)
-
-                UpdateCheckResult(
-                    latestTag = latestTag,
-                    releaseUrl = releaseUrl,
-                    apkDownloadUrl = apkDownloadUrl,
-                    hasUpdate = hasUpdateByTag && !suppressLegacyFalsePositive
-                )
+                parseReleaseJson(body, installedTag)
             } finally {
                 connection.disconnect()
             }
+        }
+    }
+
+    internal fun parseReleaseJson(body: String, installedTag: String): UpdateCheckResult {
+        val json = JSONObject(body)
+        val latestTag = json.optString("tag_name", "").ifBlank {
+            throw IllegalStateException("Missing release tag_name")
+        }
+        val rawReleaseUrl = json.optString("html_url", "").trim()
+        val releaseUrl = if (isTrustedHttpsUrl(rawReleaseUrl)) {
+            rawReleaseUrl
+        } else {
+            "https://github.com/richiesamlie/DriveReply/releases"
+        }
+
+        val assets = json.optJSONArray("assets")
+        var apkDownloadUrl: String? = null
+        if (assets != null) {
+            for (i in 0 until assets.length()) {
+                val asset = assets.optJSONObject(i) ?: continue
+                val name = asset.optString("name")
+                val candidateUrl = asset.optString("browser_download_url")
+                if (isSignedReleaseApkAsset(name, candidateUrl)) {
+                    apkDownloadUrl = candidateUrl
+                    break
+                }
+            }
+        }
+
+        val hasUpdateByTag = compareVersionTags(latestTag, installedTag) > 0
+        val suppressLegacyFalsePositive = shouldSuppressLegacyFalsePositive(installedTag, latestTag)
+
+        return UpdateCheckResult(
+            latestTag = latestTag,
+            releaseUrl = releaseUrl,
+            apkDownloadUrl = apkDownloadUrl,
+            hasUpdate = hasUpdateByTag && !suppressLegacyFalsePositive
+        )
+    }
+
+    internal fun isSignedReleaseApkAsset(name: String, downloadUrl: String): Boolean {
+        val trimmedName = name.trim()
+        val trimmedUrl = downloadUrl.trim()
+        if (trimmedName.isEmpty() || trimmedUrl.isEmpty()) return false
+        val isSignedReleaseName = trimmedName.endsWith("-release.apk", ignoreCase = true) &&
+            !trimmedName.contains("unsigned", ignoreCase = true) &&
+            !trimmedName.contains("debug", ignoreCase = true)
+        return isSignedReleaseName && isTrustedHttpsUrl(trimmedUrl)
+    }
+
+    internal fun isTrustedHttpsUrl(url: String): Boolean {
+        if (url.isBlank()) return false
+        return try {
+            val uri = URI(url.trim())
+            val scheme = uri.scheme?.lowercase()
+            val host = uri.host?.lowercase()
+            scheme == "https" && host != null && (
+                host in ALLOWED_DOWNLOAD_HOSTS ||
+                    host.endsWith(".githubusercontent.com")
+                )
+        } catch (_: Exception) {
+            false
         }
     }
 

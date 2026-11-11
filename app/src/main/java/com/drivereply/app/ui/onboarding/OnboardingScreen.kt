@@ -28,16 +28,21 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.drivereply.app.util.PermissionHelper
@@ -56,14 +61,15 @@ fun OnboardingScreen(
     viewModel: OnboardingViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    var step by remember { mutableIntStateOf(0) }
-    var templateName by remember { mutableStateOf("Driving Reply") }
-    var templateBody by remember {
+    var step by rememberSaveable { mutableIntStateOf(0) }
+    var templateName by rememberSaveable { mutableStateOf("Driving Reply") }
+    var templateBody by rememberSaveable {
         mutableStateOf("I'm currently driving and will reply as soon as it's safe.")
     }
-    var detectionMode by remember { mutableStateOf(DetectionMode.ACTIVITY) }
+    var detectionMode by rememberSaveable { mutableStateOf(DetectionMode.ACTIVITY) }
 
     var hasActivityRecognition by remember { mutableStateOf(false) }
     var hasNotificationPermission by remember { mutableStateOf(false) }
@@ -84,7 +90,15 @@ fun OnboardingScreen(
         onResult = { refreshPermissionStatus() }
     )
 
-    LaunchedEffect(Unit) { refreshPermissionStatus() }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshPermissionStatus()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(step) {
         if (step == 1) {
             refreshPermissionStatus()
@@ -156,11 +170,7 @@ fun OnboardingScreen(
                                 granted = hasActivityRecognition,
                                 actionLabel = "Grant",
                                 onAction = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
-                                    } else {
-                                        refreshPermissionStatus()
-                                    }
+                                    activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                                 }
                             )
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -255,6 +265,7 @@ fun OnboardingScreen(
                             viewModel.completeOnboarding(
                                 templateName = templateName,
                                 templateBody = templateBody,
+                                detectionMode = detectionMode.name,
                                 onComplete = onCompleted
                             )
                         }

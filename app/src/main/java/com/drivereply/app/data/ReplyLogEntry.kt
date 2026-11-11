@@ -1,10 +1,14 @@
 package com.drivereply.app.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.UUID
 
-@Entity(tableName = "reply_log")
+@Entity(
+    tableName = "reply_log",
+    indices = [Index(value = ["timestamp"])]
+)
 data class ReplyLogEntry(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
     val contactName: String,

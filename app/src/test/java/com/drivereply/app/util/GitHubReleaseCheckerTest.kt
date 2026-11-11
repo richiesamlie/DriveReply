@@ -104,4 +104,52 @@ class GitHubReleaseCheckerTest {
             GitHubReleaseChecker.shouldSuppressLegacyFalsePositive("v1.0.5", "v1.0.6")
         )
     }
+
+    // ------------------------------------------------------------------
+    //  Signed release asset & URL filtering (S-02 / Q-05)
+    // ------------------------------------------------------------------
+
+    @Test
+    fun isSignedReleaseApkAsset_acceptsSignedReleaseOnTrustedHttpsHost() {
+        assertTrue(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "https://github.com/richiesamlie/DriveReply/releases/download/v2.0.5/DriveReply-v2.0.5-release.apk"
+            )
+        )
+        assertTrue(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "app-release.apk",
+                downloadUrl = "https://objects.githubusercontent.com/github-production-release-asset/123/app-release.apk"
+            )
+        )
+    }
+
+    @Test
+    fun isSignedReleaseApkAsset_rejectsUnsignedDebugOrUntrustedAssets() {
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "app-release-unsigned.apk",
+                downloadUrl = "https://github.com/richiesamlie/DriveReply/releases/download/v2.0.5/app-release-unsigned.apk"
+            )
+        )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-debug.apk",
+                downloadUrl = "https://github.com/richiesamlie/DriveReply/releases/download/v2.0.5/DriveReply-v2.0.5-debug.apk"
+            )
+        )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "http://github.com/richiesamlie/DriveReply/releases/download/v2.0.5/DriveReply-v2.0.5-release.apk"
+            )
+        )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "https://attacker.example.com/DriveReply-v2.0.5-release.apk"
+            )
+        )
+    }
 }

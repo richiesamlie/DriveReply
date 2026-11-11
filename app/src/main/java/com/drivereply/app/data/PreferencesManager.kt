@@ -46,7 +46,7 @@ class PreferencesManager(private val context: Context) {
     }
 
     val debugLogsEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs[KEY_DEBUG_LOGS_ENABLED] ?: true
+        prefs[KEY_DEBUG_LOGS_ENABLED] ?: false
     }
 
     val hasCompletedOnboarding: Flow<Boolean> = context.dataStore.data.map { prefs ->

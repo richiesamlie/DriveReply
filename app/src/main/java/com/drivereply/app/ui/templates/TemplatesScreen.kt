@@ -109,7 +109,10 @@ fun TemplatesScreen(
             ) {
                 items(templates, key = { it.id }) { template ->
                     val isSelected = template.isActive
-                    val summaries = buildRuleSummary(rulesByTemplate[template.id].orEmpty())
+                    val rulesForTemplate = rulesByTemplate[template.id].orEmpty()
+                    val summaries = remember(template.id, rulesForTemplate) {
+                        buildRuleSummary(rulesForTemplate)
+                    }
 
                     Card(
                         shape = RoundedCornerShape(20.dp),
@@ -141,14 +144,16 @@ fun TemplatesScreen(
                                 ) {
                                     RadioButton(
                                         selected = isSelected,
-                                        onClick = { viewModel.setActiveTemplate(template.id) }
+                                        onClick = null
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = template.name,
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     if (isSelected) {
                                         Spacer(modifier = Modifier.width(8.dp))
@@ -200,7 +205,7 @@ fun TemplatesScreen(
                                 ) {
                                     summaries.forEach { summary ->
                                         AssistChip(
-                                            onClick = {},
+                                            onClick = { onAddEditTemplate(template.id) },
                                             label = { Text(summary, style = MaterialTheme.typography.labelSmall) }
                                         )
                                     }

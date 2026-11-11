@@ -64,8 +64,3 @@ val SurfaceVariantDark = Color(0xFF3F4849)
 val OnSurfaceVariantDark = Color(0xFFBFC8CA)
 val OutlineDark = Color(0xFF899294)
 val OutlineVariantDark = Color(0xFF3F4849)
-
-// Status indicator colors (for use outside the theme)
-val StatusIdle = Color(0xFF9E9E9E)
-val StatusMonitoring = Color(0xFFFFA000)
-val StatusDriving = Color(0xFF4CAF50)
