@@ -12,7 +12,7 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 # (SIGNING_KEYSTORE_REQUIRED is computed inside the build job, because the
 # env context in `if:` does not see step-level secrets and we need the
@@ -48,6 +48,8 @@ jobs:
     name: Build APK and Create CI Release
     needs: quality-gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v5
@@ -69,65 +71,98 @@ jobs:
       - name: Make Gradlew Executable
         run: chmod +x gradlew
 
+      - name: Validate and Normalize Tag Suffix
+        id: meta
+        env:
+          RAW_TAG_SUFFIX: ${{ inputs.tag_suffix }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RAW_TAG_SUFFIX" ]; then
+            if [[ ! "$RAW_TAG_SUFFIX" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+              echo "::error::Invalid tag_suffix. Only alphanumeric characters, '.', '_', and '-' are allowed." >&2
+              exit 1
+            fi
+            NORMALIZED_SUFFIX="-${RAW_TAG_SUFFIX#-}"
+          else
+            NORMALIZED_SUFFIX=""
+          fi
+          VERSION_NAME="2.0.${RUN_NUMBER}${NORMALIZED_SUFFIX}"
+          TAG_NAME="v${VERSION_NAME}"
+          echo "normalized_suffix=${NORMALIZED_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Decode Keystore or Fail on Main
         env:
           SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           SIGNING_KEYSTORE_REQUIRED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         run: |
           set -euo pipefail
-          if [ -n "$SIGNING_KEYSTORE" ]; then
-            echo "$SIGNING_KEYSTORE" | base64 --decode > release-key.jks
-            echo "::notice::Decoded signing keystore to release-key.jks ($(wc -c < release-key.jks) bytes)"
+          if [ -n "$SIGNING_KEYSTORE" ] && [ -n "$KEY_STORE_PASSWORD" ] && [ -n "$ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            printf '%s' "$SIGNING_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release-key.jks"
+            chmod 600 "$RUNNER_TEMP/release-key.jks"
+            echo "::notice::Decoded signing keystore to RUNNER_TEMP ($(wc -c < "$RUNNER_TEMP/release-key.jks") bytes)"
           elif [ "$SIGNING_KEYSTORE_REQUIRED" = "true" ]; then
-            echo "::error::RELEASE builds on main require a SIGNING_KEYSTORE secret. Refusing to ship an unsigned APK." >&2
+            echo "::error::RELEASE builds on main require all 4 signing secrets (SIGNING_KEYSTORE, KEY_STORE_PASSWORD, ALIAS, KEY_PASSWORD). Refusing to ship an unsigned APK." >&2
+            exit 1
+          elif [ -n "$SIGNING_KEYSTORE" ] || [ -n "$KEY_STORE_PASSWORD" ] || [ -n "$ALIAS" ] || [ -n "$KEY_PASSWORD" ]; then
+            echo "::error::Partial signing secrets configured. All 4 secrets (SIGNING_KEYSTORE, KEY_STORE_PASSWORD, ALIAS, KEY_PASSWORD) must be set together." >&2
             exit 1
           else
-            echo "::warning::SIGNING_KEYSTORE secret is not set. Building unsigned release APK (acceptable for PR / workflow_dispatch runs; main-branch pushes will be blocked)."
+            echo "::warning::Signing secrets are not set. Building unsigned release APK for workflow_dispatch verification; public GitHub Release creation will be skipped."
           fi
 
       - name: Build Debug and Release APKs
         run: ./gradlew assembleDebug assembleRelease
         env:
           RELEASE_VERSION_CODE: ${{ github.run_number }}
-          RELEASE_VERSION_NAME: 2.0.${{ github.run_number }}${{ inputs.tag_suffix }}
-          RELEASE_KEYSTORE_PATH: ../release-key.jks
+          RELEASE_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release-key.jks
           RELEASE_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Prepare Build Artifacts
+      - name: Clean Up Keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release-key.jks"
+
+      - name: Prepare Signed Release Artifacts
         id: prepare
+        env:
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
         run: |
           set -euo pipefail
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/DriveReply-v2.0.${{ github.run_number }}${{ inputs.tag_suffix }}-debug.apk
           if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            cp app/build/outputs/apk/release/app-release.apk build-artifacts/DriveReply-v2.0.${{ github.run_number }}${{ inputs.tag_suffix }}-release.apk
+            cp app/build/outputs/apk/release/app-release.apk "build-artifacts/DriveReply-${TAG_NAME}-release.apk"
             echo "release_signed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Release APK is unsigned. This is acceptable for workflow_dispatch and PR builds, but not for main-branch pushes (the 'Verify Keystore Present' step blocks those)."
-            cp app/build/outputs/apk/release/app-release-unsigned.apk build-artifacts/DriveReply-v2.0.${{ github.run_number }}${{ inputs.tag_suffix }}-release-unsigned.apk
+            echo "::warning::Release APK is unsigned; skipping public GitHub Release publication."
             echo "release_signed=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate SHA256SUMS
+        if: steps.prepare.outputs.release_signed == 'true'
         run: |
+          set -euo pipefail
           cd build-artifacts
-          sha256sum *.apk > SHA256SUMS.txt
+          sha256sum DriveReply-*-release.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
+        if: steps.prepare.outputs.release_signed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.${{ github.run_number }}${{ inputs.tag_suffix }}
-          name: DriveReply Build #${{ github.run_number }}${{ inputs.tag_suffix }}
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name: DriveReply Build #${{ github.run_number }}${{ steps.meta.outputs.normalized_suffix }}
           body: |
             ## Autonomous CI Build Release
 
             This release was automatically generated by the Autonomous CI pipeline on commit `${{ github.sha }}`.
-
-            ### Commit Message
-            > ${{ github.event.head_commit.message }}
 
             ### Quality Gates
             * `lintDebug` — pass
@@ -135,14 +170,12 @@ jobs:
             * `assembleDebug` + `assembleRelease` — pass
 
             ### Available Builds
-            * **Release Build**: Full R8 minification and resource shrinking applied. Maximum performance and minimal size.
-              * *Signed:* **${{ steps.prepare.outputs.release_signed }}** — set `SIGNING_KEYSTORE` in repository secrets to ship a signed release.
-            * **Debug Build**: Signed with the standard debug keystore. Instantly installable for local testing and verification.
+            * **Release Build**: Full R8 minification, resource shrinking, and production signing applied.
 
             ### Integrity
-            * `SHA256SUMS.txt` is attached alongside the APKs.
+            * `SHA256SUMS.txt` is attached alongside the signed release APK.
           files: |
-            build-artifacts/*.apk
+            build-artifacts/DriveReply-*-release.apk
             build-artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

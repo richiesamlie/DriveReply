@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
@@ -38,7 +39,9 @@ object DebugEventLogger {
     val entries: StateFlow<List<String>> = _entries.asStateFlow()
 
     @Volatile
-    private var enabled = true
+    private var enabled = false
+
+    fun isEnabled(): Boolean = enabled
 
     @Synchronized
     fun log(tag: String, message: String, throwable: Throwable? = null) {
@@ -75,6 +78,32 @@ object DebugEventLogger {
         }
     }
 
+    fun d(tag: String, message: String) {
+        log(tag, message, null)
+    }
+
+    fun w(tag: String, message: String, throwable: Throwable? = null) {
+        log(tag, message, throwable)
+    }
+
+    /**
+     * Redacts sensitive PII identifiers (such as contact names, notification keys,
+     * or Bluetooth device names/MACs) into a short non-reversible token suitable
+     * for diagnostic correlation without exposing personal data.
+     */
+    fun redact(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isEmpty()) return "<redacted:empty>"
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest(trimmed.toByteArray(Charsets.UTF_8))
+            val shortHex = digest.take(3).joinToString("") { "%02x".format(it) }
+            "<redacted:#$shortHex>"
+        } catch (_: Exception) {
+            "<redacted>"
+        }
+    }
+
     @Synchronized
     fun clear() {
         buffer.clear()
@@ -83,9 +112,15 @@ object DebugEventLogger {
 
     @Synchronized
     fun setEnabled(value: Boolean) {
+        val wasEnabled = enabled
         enabled = value
         if (value) {
-            log("DebugEventLogger", "Debug logging enabled")
+            if (!wasEnabled) {
+                log("DebugEventLogger", "Debug logging enabled")
+            }
+        } else {
+            buffer.clear()
+            _entries.value = emptyList()
         }
     }
 }

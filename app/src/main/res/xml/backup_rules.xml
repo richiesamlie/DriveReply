@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Auto-backup rules for DriveReply (API < 31).
+  Legacy auto-backup rules for DriveReply (API 29–30).
 
-  Sensitive content (Room DB, DataStore preferences) is excluded from
-  cloud + device-to-device backups to avoid leaking reply templates and
-  the user's reply history to Google Drive or to another device they
-  may not own.
+  On API 29–30, <full-backup-content> excludes sensitive content (Room DB,
+  DataStore preferences) from Google Cloud Auto Backup. On API 31+
+  (see data_extraction_rules.xml), cloud backup continues to exclude
+  the database and DataStore while explicit user-initiated device-to-device
+  transfers (<device-transfer>) preserve templates and preferences when
+  migrating to a new phone.
 
   Note: <domain="cache"> is not a valid backup-rules domain, and the
   app's cache is excluded by default anyway. The in-app updater's

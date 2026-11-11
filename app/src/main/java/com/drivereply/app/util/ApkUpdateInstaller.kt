@@ -14,7 +14,6 @@ import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
-import android.util.Base64
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -29,8 +28,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
+import java.util.Base64
 
 /**
  * Streams an APK from a remote URL into the app cache, verifies it is a
@@ -73,15 +74,29 @@ class ApkUpdateInstaller(
         targetTag: String,
         channelId: String = DEFAULT_CHANNEL_ID,
     ): Flow<UpdateEvent> = flow<UpdateEvent> {
-        val targetFile = File(updatesDir, "DriveReply-$targetTag.apk")
+        val safeTag = sanitizeTag(targetTag)
+        val canonicalUpdatesDir = updatesDir.canonicalFile
+        val targetFile = File(canonicalUpdatesDir, "DriveReply-$safeTag.apk")
+        val partFile = File(canonicalUpdatesDir, "DriveReply-$safeTag.apk.part")
+        if (targetFile.canonicalFile.parentFile != canonicalUpdatesDir ||
+            partFile.canonicalFile.parentFile != canonicalUpdatesDir
+        ) {
+            val err = UpdateError.Unknown("Invalid update target path for tag '$targetTag'")
+            notifier.onFailed(channelId, safeTag, err.message)
+            emit(UpdateEvent.Failed(err))
+            return@flow
+        }
+
         // Best-effort cleanup of any previous in-progress attempt:
+        //   - partial `.apk.part` from an interrupted/cancelled download
         //   - zero-byte placeholder from a canceled download
         //   - any older file in updates/ that we did not produce
         //     ourselves (an interrupted download that crashed the
         //     process before completion)
+        if (partFile.exists()) partFile.delete()
         if (targetFile.exists() && targetFile.length() == 0L) targetFile.delete()
         cleanupStaleDownloads(keepCanonical = targetFile.name)
-        notifier.onPreparing(channelId, targetTag)
+        notifier.onPreparing(channelId, safeTag)
         emit(UpdateEvent.Preparing(targetFile))
 
         // Download + verify with bounded exponential backoff. Only
@@ -92,43 +107,51 @@ class ApkUpdateInstaller(
         var attempt = 0
         while (true) {
             attempt++
-            var transient: IOException? = null
-            try {
+            val transient: IOException = try {
                 val outcome = downloadAndVerifyOnce(
                     url = url,
+                    partFile = partFile,
                     targetFile = targetFile,
                     channelId = channelId,
-                    targetTag = targetTag,
+                    targetTag = safeTag,
                     publish = { event -> emit(event) },
                 )
                 when (outcome) {
                     is DownloadOnceOutcome.Done -> {
-                        notifier.onReady(channelId, targetTag, outcome.certificateSha256)
+                        notifier.onReady(channelId, safeTag, outcome.certificateSha256)
                         emit(UpdateEvent.Ready(targetFile, outcome.certificateSha256))
                         return@flow
                     }
                     is DownloadOnceOutcome.PermanentFailure -> {
-                        notifier.onFailed(channelId, targetTag, outcome.error.message)
+                        if (partFile.exists()) partFile.delete()
+                        if (targetFile.exists()) targetFile.delete()
+                        notifier.onFailed(channelId, safeTag, outcome.error.message)
                         emit(UpdateEvent.Failed(outcome.error))
                         return@flow
                     }
-                    is DownloadOnceOutcome.TransientFailure -> transient = outcome.cause
+                    is DownloadOnceOutcome.TransientFailure -> outcome.cause
                 }
             } catch (e: IOException) {
-                transient = e
+                e
             } catch (e: SecurityException) {
-                notifier.onFailed(channelId, targetTag, e.message ?: "Permission denied")
+                if (partFile.exists()) partFile.delete()
+                notifier.onFailed(channelId, safeTag, e.message ?: "Permission denied")
                 emit(UpdateEvent.Failed(UpdateError.PermissionDenied(e.message ?: "Permission denied")))
                 return@flow
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                if (partFile.exists()) partFile.delete()
+                throw e
             } catch (e: Exception) {
-                notifier.onFailed(channelId, targetTag, e.message ?: "Unknown error")
+                if (partFile.exists()) partFile.delete()
+                notifier.onFailed(channelId, safeTag, e.message ?: "Unknown error")
                 emit(UpdateEvent.Failed(UpdateError.Unknown(e.message ?: "Unknown error")))
                 return@flow
             }
+            if (partFile.exists()) partFile.delete()
             if (attempt >= maxAttempts) {
-                val transientMsg = transient?.message ?: "I/O error"
+                val transientMsg = transient.message ?: "I/O error"
                 notifier.onFailed(
-                    channelId, targetTag,
+                    channelId, safeTag,
                     "Network failed after $maxAttempts attempts: $transientMsg"
                 )
                 emit(UpdateEvent.Failed(UpdateError.Io(
@@ -138,15 +161,13 @@ class ApkUpdateInstaller(
             }
             val backoffMs = computeBackoffMs(attempt)
             notifier.onFailed(
-                channelId, targetTag,
+                channelId, safeTag,
                 "Network error, retrying in ${backoffMs}ms (attempt ${attempt + 1}/$maxAttempts)"
             )
             // Cancellable: if the user hits Cancel during the backoff
             // window, kotlinx.coroutines.delay throws
             // CancellationException and the flow unwinds cleanly.
             kotlinx.coroutines.delay(backoffMs)
-            // Drop any partial bytes so the next attempt starts clean.
-            if (targetFile.exists()) targetFile.delete()
         }
     }.flowOn(Dispatchers.IO)
 
@@ -159,6 +180,7 @@ class ApkUpdateInstaller(
 
     internal suspend fun downloadAndVerifyOnce(
         url: String,
+        partFile: File,
         targetFile: File,
         channelId: String,
         targetTag: String,
@@ -169,12 +191,12 @@ class ApkUpdateInstaller(
             currentConnection = conn
             val responseCode = conn.responseCode
             if (responseCode !in 200..299) {
+                partFile.delete()
                 // 4xx (except 408/429) are permanent. 5xx and 408/429 are
                 // transient: server issues or "back off and retry".
                 if (responseCode in 400..499 &&
                     responseCode != 408 && responseCode != 429
                 ) {
-                    targetFile.delete()
                     return DownloadOnceOutcome.PermanentFailure(
                         UpdateError.HttpStatus(responseCode)
                     )
@@ -184,18 +206,31 @@ class ApkUpdateInstaller(
                 )
             }
             val totalBytes = conn.contentLengthLong.takeIf { it > 0 }
+            if (totalBytes != null && totalBytes > MAX_APK_BYTES) {
+                partFile.delete()
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.Io("APK size ($totalBytes bytes) exceeds limit ($MAX_APK_BYTES bytes)")
+                )
+            }
             conn.inputStream.use { input ->
-                FileOutputStream(targetFile).use { output ->
+                FileOutputStream(partFile).use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var written = 0L
                     var lastEmittedPercent = -1
                     while (true) {
                         val read = input.read(buffer)
                         if (read == -1) break
-                        output.write(buffer, 0, read)
                         written += read
+                        if (written > MAX_APK_BYTES) {
+                            output.close()
+                            partFile.delete()
+                            return DownloadOnceOutcome.PermanentFailure(
+                                UpdateError.Io("APK download exceeded maximum allowed size ($MAX_APK_BYTES bytes)")
+                            )
+                        }
+                        output.write(buffer, 0, read)
                         if (totalBytes != null) {
-                            val percent = ((written * 100L) / totalBytes).toInt()
+                            val percent = ((written * 100L) / totalBytes).toInt().coerceIn(0, 100)
                             if (percent != lastEmittedPercent) {
                                 lastEmittedPercent = percent
                                 notifier.onProgress(channelId, targetTag, percent)
@@ -209,15 +244,13 @@ class ApkUpdateInstaller(
             publish(UpdateEvent.Verifying(targetFile))
             notifier.onVerifying(channelId, targetTag)
 
-            // Gate #1: parse the downloaded APK manifest.
+            // Gate #1: parse the downloaded APK manifest from partFile before exposing as .apk.
             val pm = context.packageManager
             val apkInfo: PackageInfo = try {
-                pm.getPackageArchiveInfo(
-                    targetFile.absolutePath,
-                    PackageManager.GET_SIGNING_CERTIFICATES,
-                ) ?: throw IllegalStateException("PackageManager returned null for APK")
+                getPackageArchiveInfoCompat(pm, partFile.absolutePath)
+                    ?: throw IllegalStateException("PackageManager returned null for APK")
             } catch (e: Exception) {
-                targetFile.delete()
+                partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.Unknown("Could not parse APK manifest: ${e.message}")
                 )
@@ -225,7 +258,7 @@ class ApkUpdateInstaller(
 
             // Gate #1b: package name must match the installed app.
             if (apkInfo.packageName != context.packageName) {
-                targetFile.delete()
+                partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.WrongPackage(
                         expected = context.packageName,
@@ -236,9 +269,9 @@ class ApkUpdateInstaller(
 
             // Gate #2: versionCode direction.
             val installedInfo = try {
-                pm.getPackageInfo(context.packageName, 0)
+                getPackageInfoCompat(pm, context.packageName, 0)
             } catch (e: Exception) {
-                targetFile.delete()
+                partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.Unknown("Could not read installed info: ${e.message}")
                 )
@@ -246,18 +279,18 @@ class ApkUpdateInstaller(
             when (val versionCheck = compareVersionCodes(
                 // longVersionCode was added in API 28 (P); minSdk = 29 so
                 // it is always available.
-                downloaded = apkInfo.longVersionCode.toInt(),
-                installed = installedInfo.longVersionCode.toInt(),
+                downloaded = apkInfo.longVersionCode,
+                installed = installedInfo.longVersionCode,
             )) {
                 VersionCheckResult.Newer -> { /* proceed to signature check */ }
                 VersionCheckResult.AlreadyCurrent -> {
-                    targetFile.delete()
+                    partFile.delete()
                     return DownloadOnceOutcome.PermanentFailure(
                         UpdateError.AlreadyCurrent
                     )
                 }
                 is VersionCheckResult.Downgrade -> {
-                    targetFile.delete()
+                    partFile.delete()
                     return DownloadOnceOutcome.PermanentFailure(
                         UpdateError.Downgrade(versionCheck.downloaded, versionCheck.installed)
                     )
@@ -265,11 +298,25 @@ class ApkUpdateInstaller(
             }
 
             // Gate #3: signing certificate must match the installed app.
-            val verification = signatureStore.verifyMatchesInstalledApp(targetFile, apkInfo)
+            val verification = signatureStore.verifyMatchesInstalledApp(partFile, apkInfo)
             if (verification !is SignatureMatchResult.Matches) {
-                targetFile.delete()
+                partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.SignatureMismatch(verification.javaClass.simpleName)
+                )
+            }
+
+            // Atomically promote verified partFile to targetFile.
+            if (targetFile.exists() && !targetFile.delete()) {
+                partFile.delete()
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.Io("Could not replace existing APK file")
+                )
+            }
+            if (!partFile.renameTo(targetFile)) {
+                partFile.delete()
+                return DownloadOnceOutcome.PermanentFailure(
+                    UpdateError.Io("Could not finalize verified APK file")
                 )
             }
             return DownloadOnceOutcome.Done(verification.certificateSha256)
@@ -353,7 +400,9 @@ class ApkUpdateInstaller(
     sealed interface VersionCheckResult {
         data object Newer : VersionCheckResult
         data object AlreadyCurrent : VersionCheckResult
-        data class Downgrade(val downloaded: Int, val installed: Int) : VersionCheckResult
+        data class Downgrade(val downloaded: Long, val installed: Long) : VersionCheckResult {
+            constructor(downloaded: Int, installed: Int) : this(downloaded.toLong(), installed.toLong())
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -374,8 +423,10 @@ class ApkUpdateInstaller(
         data class PermissionDenied(override val message: String) : UpdateError(message)
         data class SignatureMismatch(val verifier: String) :
             UpdateError("Signing certificate mismatch (verifier=$verifier)")
-        data class Downgrade(val downloaded: Int, val installed: Int) :
-            UpdateError("Refusing to install older build: downloaded=$downloaded, installed=$installed")
+        data class Downgrade(val downloaded: Long, val installed: Long) :
+            UpdateError("Refusing to install older build: downloaded=$downloaded, installed=$installed") {
+            constructor(downloaded: Int, installed: Int) : this(downloaded.toLong(), installed.toLong())
+        }
         data object AlreadyCurrent :
             UpdateError("Downloaded build has the same versionCode as the installed app")
         data class WrongPackage(val expected: String, val actual: String?) :
@@ -394,7 +445,12 @@ class ApkUpdateInstaller(
 
     object HttpUrlConnectionTransport : UpdateTransport {
         override fun open(url: String): HttpURLConnection {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            if (!isTrustedUpdateUrl(url)) {
+                throw SecurityException("Untrusted or non-HTTPS update URL")
+            }
+            val urlConnection = URL(url).openConnection()
+            val conn = (urlConnection as? HttpURLConnection
+                ?: throw SecurityException("Unsupported URL connection type")).apply {
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/vnd.android.package-archive")
                 connectTimeout = 15_000
@@ -442,42 +498,35 @@ class ApkUpdateInstaller(
         ): SignatureMatchResult {
             val pm = context.packageManager
             return try {
-                val apkSigners = apkInfo.signingInfo
-                    ?.takeIf { it.hasMultipleSigners() || it.hasPastSigningCertificates() }
-                    ?.signingCertificateHistory
-                    ?: apkInfo.signingInfo?.apkContentsSigners
-                    ?: return SignatureMatchResult.NoSigners
-                val apkSig = apkSigners.firstOrNull() ?: return SignatureMatchResult.NoSigners
+                val apkSigningInfo = apkInfo.signingInfo ?: return SignatureMatchResult.NoSigners
+                val apkContentsSigners = apkSigningInfo.apkContentsSigners
+                    ?.map { it.toByteArray() }
+                    .orEmpty()
+                val apkHistorySigners = apkSigningInfo.signingCertificateHistory
+                    ?.map { it.toByteArray() }
+                    .orEmpty()
 
-                val installed: PackageInfo = pm.getPackageInfo(
+                val installed: PackageInfo = getPackageInfoCompat(
+                    pm,
                     context.packageName,
                     PackageManager.GET_SIGNING_CERTIFICATES,
                 )
-                val installedSigners = installed.signingInfo
-                    ?.takeIf { it.hasMultipleSigners() || it.hasPastSigningCertificates() }
-                    ?.signingCertificateHistory
-                    ?: installed.signingInfo?.apkContentsSigners
+                val installedSigningInfo = installed.signingInfo
                     ?: return SignatureMatchResult.NoInstalledSigners
-                val installedSig = installedSigners.firstOrNull()
-                    ?: return SignatureMatchResult.NoInstalledSigners
+                val installedContentsSigners = installedSigningInfo.apkContentsSigners
+                    ?.map { it.toByteArray() }
+                    .orEmpty()
 
-                if (signaturesEqual(apkSig, installedSig)) {
-                    SignatureMatchResult.Matches(fingerprint(installedSig))
-                } else {
-                    SignatureMatchResult.Mismatch
-                }
+                verifySignerBytesMatch(
+                    apkContentsSigners = apkContentsSigners,
+                    apkHistorySigners = apkHistorySigners,
+                    apkHasMultipleSigners = apkSigningInfo.hasMultipleSigners(),
+                    installedContentsSigners = installedContentsSigners,
+                    installedHasMultipleSigners = installedSigningInfo.hasMultipleSigners(),
+                )
             } catch (e: Exception) {
                 SignatureMatchResult.Error(e.message ?: e.javaClass.simpleName)
             }
-        }
-
-        private fun signaturesEqual(a: Signature, b: Signature): Boolean {
-            // Bytewise equality is correct for an APK's `apkContentsSigners`
-            // because the platform returns the raw certificate bytes of the
-            // exact signer that v2/v3 verified against. No DER parsing needed
-            // unless the platform starts rotating the same key, in which case
-            // the byte sequences differ and we correctly reject.
-            return MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
         }
     }
 
@@ -600,6 +649,7 @@ class ApkUpdateInstaller(
         const val DEFAULT_CHANNEL_ID = "drive_reply_updates"
         const val DEFAULT_NOTIFICATION_ID = 4701
         const val EXTRA_OPEN_UPDATES = "com.drivereply.app.extra.OPEN_UPDATES"
+        const val MAX_APK_BYTES: Long = 100L * 1024L * 1024L
 
         /**
          * Maximum number of download attempts before we surface a
@@ -609,6 +659,118 @@ class ApkUpdateInstaller(
          * making the user wait too long.
          */
         const val MAX_DOWNLOAD_ATTEMPTS = 3
+
+        private val SAFE_TAG_REGEX = Regex("[^A-Za-z0-9._-]")
+        private val ALLOWED_UPDATE_HOSTS = setOf(
+            "github.com",
+            "objects.githubusercontent.com",
+            "release-assets.githubusercontent.com",
+            "api.github.com"
+        )
+
+        internal fun sanitizeTag(tag: String): String {
+            val cleaned = tag.trim().replace(SAFE_TAG_REGEX, "_").trim('.', '_')
+            return cleaned.ifEmpty { "latest" }
+        }
+
+        internal fun isTrustedUpdateUrl(url: String): Boolean {
+            if (url.isBlank()) return false
+            return try {
+                val uri = URI(url.trim())
+                val scheme = uri.scheme?.lowercase()
+                val host = uri.host?.lowercase()
+                scheme == "https" && host != null && (
+                    host in ALLOWED_UPDATE_HOSTS ||
+                        host.endsWith(".githubusercontent.com")
+                    )
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        /**
+         * Pure-JVM verification of APK signer certificate byte arrays,
+         * supporting multi-signer APKs and key rotation (`signingCertificateHistory`).
+         */
+        internal fun verifySignerBytesMatch(
+            apkContentsSigners: List<ByteArray>,
+            apkHistorySigners: List<ByteArray> = emptyList(),
+            apkHasMultipleSigners: Boolean = apkContentsSigners.size > 1,
+            installedContentsSigners: List<ByteArray>,
+            installedHasMultipleSigners: Boolean = installedContentsSigners.size > 1,
+        ): SignatureMatchResult {
+            if (apkContentsSigners.isEmpty()) return SignatureMatchResult.NoSigners
+            if (installedContentsSigners.isEmpty()) return SignatureMatchResult.NoInstalledSigners
+
+            if (apkHasMultipleSigners != installedHasMultipleSigners) {
+                return SignatureMatchResult.Mismatch
+            }
+
+            if (apkHasMultipleSigners) {
+                if (apkContentsSigners.size != installedContentsSigners.size) {
+                    return SignatureMatchResult.Mismatch
+                }
+                val allMatch = apkContentsSigners.all { apkCert ->
+                    installedContentsSigners.any { instCert -> MessageDigest.isEqual(apkCert, instCert) }
+                } && installedContentsSigners.all { instCert ->
+                    apkContentsSigners.any { apkCert -> MessageDigest.isEqual(apkCert, instCert) }
+                }
+                return if (allMatch) {
+                    SignatureMatchResult.Matches(fingerprintBytes(installedContentsSigners.first()))
+                } else {
+                    SignatureMatchResult.Mismatch
+                }
+            }
+
+            val apkActive = apkContentsSigners.first()
+            val installedActive = installedContentsSigners.first()
+            if (MessageDigest.isEqual(apkActive, installedActive)) {
+                return SignatureMatchResult.Matches(fingerprintBytes(installedActive))
+            }
+
+            // Support official Android key rotation: if the downloaded APK has
+            // a signing certificate lineage containing the installed app's active
+            // certificate, and its current active certificate is the head of that lineage.
+            if (apkHistorySigners.isNotEmpty() &&
+                MessageDigest.isEqual(apkHistorySigners.last(), apkActive) &&
+                apkHistorySigners.any { histCert -> MessageDigest.isEqual(histCert, installedActive) }
+            ) {
+                return SignatureMatchResult.Matches(fingerprintBytes(apkActive))
+            }
+
+            return SignatureMatchResult.Mismatch
+        }
+
+        private fun getPackageArchiveInfoCompat(
+            pm: PackageManager,
+            archivePath: String,
+        ): PackageInfo? {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageArchiveInfo(
+                    archivePath,
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(archivePath, PackageManager.GET_SIGNING_CERTIFICATES)
+            }
+        }
+
+        private fun getPackageInfoCompat(
+            pm: PackageManager,
+            packageName: String,
+            flags: Int,
+        ): PackageInfo {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(flags.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, flags)
+            }
+        }
 
         /**
          * Exponential backoff, in milliseconds.
@@ -630,7 +792,7 @@ class ApkUpdateInstaller(
          * Exposed as a static so the pure logic is unit-testable without
          * an Android Context or any platform dependency.
          */
-        internal fun compareVersionCodes(downloaded: Int, installed: Int): VersionCheckResult =
+        internal fun compareVersionCodes(downloaded: Long, installed: Long): VersionCheckResult =
             when {
                 downloaded < installed ->
                     VersionCheckResult.Downgrade(downloaded = downloaded, installed = installed)
@@ -638,14 +800,24 @@ class ApkUpdateInstaller(
                 else -> VersionCheckResult.Newer
             }
 
+        internal fun compareVersionCodes(downloaded: Int, installed: Int): VersionCheckResult =
+            compareVersionCodes(downloaded = downloaded.toLong(), installed = installed.toLong())
+
+        /**
+         * Base64-NOPAD SHA-256 of raw certificate bytes. Exposed as `internal`
+         * so unit tests can exercise the production implementation on JVM.
+         */
+        internal fun fingerprintBytes(bytes: ByteArray): String {
+            val md = MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(bytes)
+            return Base64.getEncoder().withoutPadding().encodeToString(digest)
+        }
+
         /**
          * Base64-NOPAD SHA-256 of a Signature's bytes. Exposed for the
          * notification/debug-log path; not used in the equality check.
          */
-        fun fingerprint(signature: Signature): String {
-            val md = MessageDigest.getInstance("SHA-256")
-            val digest = md.digest(signature.toByteArray())
-            return Base64.encodeToString(digest, Base64.NO_WRAP or Base64.NO_PADDING)
-        }
+        fun fingerprint(signature: Signature): String =
+            fingerprintBytes(signature.toByteArray())
     }
 }
