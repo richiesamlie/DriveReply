@@ -15,24 +15,24 @@ Built using **Kotlin**, **Jetpack Compose (Material 3)**, **Room Database**, **G
 - **Vehicular Exit Debounce**: Employs a 2-minute delay before exiting the driving state. This keeps the auto-reply active during brief stops (e.g., stoplights, fuel stops) and avoids battery-draining state toggles.
 
 ### 💬 Platform & Multi-App Support
-- **Multi-App Expansion**: Auto-replies are platform-agnostic and support **WhatsApp**, **WhatsApp Business**, **Telegram**, **Signal**, **Facebook Messenger**, and common Android SMS apps (Google/Samsung/AOSP Messages packages).
+- **Multi-App Expansion**: Auto-replies are platform-agnostic and support **WhatsApp**, **WhatsApp Business**, **Telegram**, **Telegram X**, **Signal**, **Facebook Messenger**, and common Android SMS apps (Google/Samsung/AOSP Messages packages).
 - **Silent Auto-Replies**: Intercepts incoming notifications using a `NotificationListenerService` and dispatches immediate replies back using Android's native `RemoteInput` framework.
-- **Privacy-First Deduplication**: Sends exactly one auto-reply per conversation per driving session (keyed by package + conversation identity). Ignores group chat notifications by default (customizable in Settings).
+- **Privacy-First Deduplication**: Sends at most one auto-reply per conversation per driving session (keyed by package + conversation identity) with a cross-session cooldown guard. Ignores group chat notifications by default (customizable in Settings).
 
 ### 🛠 Reliability & Diagnostics
 - **Listener Recovery**: If notification access is granted but the listener is not bound, DriveReply automatically requests rebind and exposes a manual **Rebind Listener** action in Home.
 - **Manual Simulation Override**: Developer simulation mode is a hard override; auto triggers cannot force-stop it until you manually turn it off.
-- **In-App Debug Logs**: Built-in debug log viewer in Settings with enable/disable toggle, clear, and copy-to-clipboard flow for fast support triage.
-- **GitHub Release Updates (in-app)**: Settings → About has a *Check for updates* button that polls the latest GitHub release. When a newer build is available, *Download & install* streams the APK with a progress bar, verifies the signing certificate matches the currently installed app, and hands off to the system package installer — no browser, no manual file-shuffling. The GitHub release page is still offered as a fallback.
+- **In-App Debug Logs**: Built-in opt-in debug log viewer in Settings → Debugging with enable/disable toggle (disabled by default for privacy), PII redaction, clear, and copy-to-clipboard flow for fast support triage.
+- **GitHub Release Updates (in-app)**: Settings → Updates & About has a *Check for updates* button that polls the latest signed GitHub release. When a newer build is available, *Download & install* streams the APK with a progress bar, verifies the package identity, version code, and signing certificate against the currently installed app, and hands off to the system package installer — no browser, no manual file-shuffling. The GitHub release page is still offered as a fallback.
 
 ### 🎯 Deep Customization Rules
-- **Granular Custom Rules**: Define contact-specific message templates, active days of the week, and start/end time windows.
+- **Granular Custom Rules**: Define contact-specific message templates, active days of the week, and start/end time windows (including overnight schedules) directly from the template editor.
 - **Dynamic Matching Engine**: Prioritizes contact-specific rules, then schedule rules, before falling back to the active global template.
 
 ### 📊 Safety Analytics Dashboard
-- **Circular Safety Score**: A beautiful, hardware-accelerated gauge illustrating your safe driving score based on blocked phone distractions.
+- **Protection Summary Cards**: At-a-glance metrics displaying total auto-replies sent and unique contacts reached.
 - **Spline Protection Chart**: A smooth cubic-bezier line chart drawn using Jetpack Compose `Canvas` showing auto-replies sent over the last 7 days, complete with visual gridlines and alpha-gradients.
-- **Donut App Breakdown**: Segment-based circular donut graph with rounded end-caps and responsive legends showing auto-reply ratios across messaging apps.
+- **Donut App Breakdown**: Segment-based circular donut graph with rounded end-caps and responsive legends showing auto-reply ratios across all 9 supported messaging apps.
 
 ---
 
@@ -97,9 +97,9 @@ To function reliably in the background, DriveReply utilizes:
 4. Deploy the debug build to your physical device or a Play Services-supported emulator.
 
 ### Release Versioning
-- CI release tags are published as `v1.0.<run_number>`.
-- Release APK metadata is aligned to that same value (`versionName = 1.0.<run_number>`, `versionCode = <run_number>`).
-- In Settings → About, DriveReply displays the installed GitHub-style version and can compare it against the latest GitHub release.
+- CI release tags are published as `v2.0.<run_number>`.
+- Release APK metadata is aligned to that same value (`versionName = 2.0.<run_number>`, `versionCode = <run_number>`).
+- In Settings → Updates & About, DriveReply displays the installed GitHub-style version and can compare it against the latest signed GitHub release.
 
 ---
 

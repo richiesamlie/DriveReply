@@ -44,7 +44,7 @@ class TemplateRuleTest {
         assertEquals(61200000L, rule.endTime)
     }
 
-    // Unit test verifying the matching algorithm that runs inside the notification listener
+    // Unit test verifying the production matching algorithm in TemplateRule
     @Test
     fun rule_matchingAlgorithm() {
         val targetContact = "John Doe"
@@ -72,60 +72,68 @@ class TemplateRuleTest {
             endTime = 61200000L    // 5:00 PM
         )
         
-        val rulesList = listOf(rule1, rule2)
+        val rulesList = listOf(rule2, rule1)
         
         // Scenario 1: John Doe messages during business hours on Tuesday.
-        // Expect: Matches rule1 (specific contact rule)
-        val resolvedTemplateId1 = resolveTemplateId(rulesList, targetContact, activeDay, nowMs)
-        assertEquals("temp-specific-contact", resolvedTemplateId1)
+        // Expect: Matches rule1 (specific contact rule prioritized even when rule2 is first in list)
+        val resolvedRule1 = TemplateRule.resolveBestRule(rulesList, targetContact, activeDay, nowMs)
+        assertEquals("temp-specific-contact", resolvedRule1?.templateId)
         
         // Scenario 2: Jane Smith messages during business hours on Tuesday.
         // Expect: Matches rule2 (general workday rule since no Jane Smith specific rule is defined)
-        val resolvedTemplateId2 = resolveTemplateId(rulesList, otherContact, activeDay, nowMs)
-        assertEquals("temp-general-workday", resolvedTemplateId2)
+        val resolvedRule2 = TemplateRule.resolveBestRule(rulesList, otherContact, activeDay, nowMs)
+        assertEquals("temp-general-workday", resolvedRule2?.templateId)
         
         // Scenario 3: John Doe messages on Saturday (inactive day).
         // Expect: No rules match, returns null (meaning fallback to global active template)
-        val resolvedTemplateId3 = resolveTemplateId(rulesList, targetContact, inactiveDay, nowMs)
-        assertNull(resolvedTemplateId3)
+        val resolvedRule3 = TemplateRule.resolveBestRule(rulesList, targetContact, inactiveDay, nowMs)
+        assertNull(resolvedRule3)
         
         // Scenario 4: John Doe messages at 8:00 PM (outside time window).
         // Expect: No rules match, returns null
-        val resolvedTemplateId4 = resolveTemplateId(rulesList, targetContact, activeDay, nightMs)
-        assertNull(resolvedTemplateId4)
+        val resolvedRule4 = TemplateRule.resolveBestRule(rulesList, targetContact, activeDay, nightMs)
+        assertNull(resolvedRule4)
     }
 
-    private fun resolveTemplateId(
-        rules: List<TemplateRule>,
-        contactName: String,
-        currentDayOfWeek: Int,
-        currentMsSinceMidnight: Long
-    ): String? {
-        // Filter rules that match time/day constraints and are for this contact or all contacts
-        val matchingRules = rules.filter { rule ->
-            val isCorrectContact = rule.contactName == null || rule.contactName == contactName
-            if (!isCorrectContact) return@filter false
+    @Test
+    fun rule_overnightTimeWindow_matchesAcrossMidnight() {
+        val overnightRule = TemplateRule(
+            templateId = "temp-night-shift",
+            contactName = null,
+            daysOfWeek = "1,2,3,4,5,6,7",
+            startTime = 22L * 3600_000L, // 22:00
+            endTime = 6L * 3600_000L     // 06:00
+        )
 
-            val daysMatch = if (!rule.daysOfWeek.isNullOrEmpty()) {
-                val daysList = rule.daysOfWeek.split(",").mapNotNull { it.trim().toIntOrNull() }
-                currentDayOfWeek in daysList
-            } else {
-                true
-            }
+        // 23:00 -> inside overnight window
+        assertTrue(overnightRule.matches("Anyone", 1, 23L * 3600_000L))
+        // 02:00 -> inside overnight window
+        assertTrue(overnightRule.matches("Anyone", 1, 2L * 3600_000L))
+        // 12:00 -> outside overnight window
+        org.junit.Assert.assertFalse(overnightRule.matches("Anyone", 1, 12L * 3600_000L))
+    }
 
-            val timeMatch = if (rule.startTime != null && rule.endTime != null) {
-                currentMsSinceMidnight in rule.startTime..rule.endTime
-            } else {
-                true
-            }
+    @Test
+    fun rule_contactMatching_isCaseAndWhitespaceInsensitive() {
+        val rule = TemplateRule(
+            templateId = "temp-contact",
+            contactName = "  John Doe  "
+        )
+        assertTrue(rule.matches("john doe", 3, 10_000L))
+        assertTrue(rule.matches("  JOHN DOE ", 3, 10_000L))
+        org.junit.Assert.assertFalse(rule.matches("Jane Doe", 3, 10_000L))
+    }
 
-            daysMatch && timeMatch
-        }
-
-        // Prioritize specific contact rule over general rule
-        val bestRule = matchingRules.firstOrNull { it.contactName != null }
-            ?: matchingRules.firstOrNull { it.contactName == null }
-            
-        return bestRule?.templateId
+    @Test
+    fun rule_matchingRules_ordersSpecificBeforeGeneral() {
+        val general = TemplateRule(templateId = "general-id", contactName = null)
+        val specific = TemplateRule(templateId = "specific-id", contactName = "Alice")
+        val ordered = TemplateRule.matchingRules(
+            rules = listOf(general, specific),
+            contactName = "alice",
+            dayOfWeek = 1,
+            currentMsSinceMidnight = 0L
+        )
+        assertEquals(listOf("specific-id", "general-id"), ordered.map { it.templateId })
     }
 }
