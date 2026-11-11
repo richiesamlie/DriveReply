@@ -3,7 +3,6 @@ package com.drivereply.app.ui.settings
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,19 +18,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CompassCalibration
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -60,29 +55,37 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.drivereply.app.R
 import com.drivereply.app.util.PermissionHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class SettingsPane(val title: String) {
+enum class SettingsPane(val title: String) {
     HOME("Settings"),
     SETUP("Setup & Access"),
     PREFERENCES("Preferences"),
@@ -97,14 +100,18 @@ private enum class SettingsPane(val title: String) {
 fun SettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    initialPane: SettingsPane = SettingsPane.HOME,
     viewModel: SettingsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
     val setupState by viewModel.setupState.collectAsStateWithLifecycle()
+    val pairedBluetoothDevices by viewModel.pairedBluetoothDevices.collectAsStateWithLifecycle()
+    val isServiceEnabled by viewModel.isServiceEnabled.collectAsStateWithLifecycle()
     val replyInGroups by viewModel.replyInGroupChats.collectAsStateWithLifecycle()
     val retentionDays by viewModel.logRetentionDays.collectAsStateWithLifecycle()
     val activeBluetoothDevices by viewModel.bluetoothDevices.collectAsStateWithLifecycle()
@@ -114,7 +121,7 @@ fun SettingsScreen(
     val isDriving by viewModel.isDriving.collectAsStateWithLifecycle()
     val updateState by viewModel.updateCheckState.collectAsStateWithLifecycle()
 
-    var pane by remember { mutableStateOf(SettingsPane.HOME) }
+    var pane by rememberSaveable { mutableStateOf(initialPane) }
     var copiedNotice by remember { mutableStateOf<String?>(null) }
     var diagnosticsSnapshot by remember {
         mutableStateOf("Tap Copy Snapshot to generate a compact status report for support.")
@@ -122,7 +129,13 @@ fun SettingsScreen(
     // When the user taps "Download & install" and we have to ask for
     // POST_NOTIFICATIONS first, this flag is set so the launcher's
     // callback can fire the actual download regardless of grant result.
-    var pendingStartDownload by remember { mutableStateOf(false) }
+    var pendingStartDownload by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(initialPane) {
+        if (initialPane != SettingsPane.HOME) {
+            pane = initialPane
+        }
+    }
 
     val activityRecognitionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -154,9 +167,17 @@ fun SettingsScreen(
         onResult = { viewModel.refreshSetupState() }
     )
 
-    LaunchedEffect(Unit) { viewModel.refreshSetupState() }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshSetupState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(pane) {
-        if (pane == SettingsPane.SETUP) {
+        if (pane == SettingsPane.SETUP || pane == SettingsPane.AUTOMATION) {
             viewModel.refreshSetupState()
         }
     }
@@ -208,11 +229,7 @@ fun SettingsScreen(
                     onOpenListenerSettings = { PermissionHelper.openNotificationListenerSettings(context) },
                     onRebindListener = { PermissionHelper.requestNotificationListenerRebind(context) },
                     onRequestActivityRecognition = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
-                        } else {
-                            viewModel.refreshSetupState()
-                        }
+                        activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                     },
                     onRequestNotificationPermission = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -228,7 +245,7 @@ fun SettingsScreen(
                         )
                     },
                     onRequestBackgroundLocation = {
-                        if (setupState.hasFineLocation && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        if (setupState.hasFineLocation) {
                             backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                         }
                     },
@@ -250,8 +267,14 @@ fun SettingsScreen(
                 SettingsPane.AUTOMATION -> SettingsAutomation(
                     speedThreshold = speedThreshold,
                     onSetSpeedThreshold = viewModel::setSpeedActivationThreshold,
+                    hasBluetoothConnect = setupState.hasBluetoothConnect,
+                    onRequestBluetooth = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                        }
+                    },
                     activeBluetoothDevices = activeBluetoothDevices,
-                    pairedDevices = viewModel.getPairedBluetoothDevices(),
+                    pairedDevices = pairedBluetoothDevices,
                     onToggleBluetooth = viewModel::toggleBluetoothDevice
                 )
                 SettingsPane.RELIABILITY -> SettingsReliability(
@@ -260,7 +283,7 @@ fun SettingsScreen(
                         PermissionHelper.openBatteryOptimizationSettings(context, context.packageName)
                     },
                     onOpenDontKillMyApp = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://dontkillmyapp.com")).apply {
+                        val intent = Intent(Intent.ACTION_VIEW, "https://dontkillmyapp.com".toUri()).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         context.startActivity(intent)
@@ -268,6 +291,7 @@ fun SettingsScreen(
                 )
                 SettingsPane.DEBUGGING -> SettingsDebugging(
                     debugLogsEnabled = debugLogsEnabled,
+                    isServiceEnabled = isServiceEnabled,
                     isDriving = isDriving,
                     debugLogText = debugLogText,
                     diagnosticsSnapshot = diagnosticsSnapshot,
@@ -308,9 +332,10 @@ fun SettingsScreen(
                             viewModel.startDownloadAndInstall()
                         }
                     },
+                    onInstallDownloaded = viewModel::installDownloadedApk,
                     onCancelDownload = viewModel::cancelDownload,
                     onOpenLink = { url ->
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        val intent = Intent(Intent.ACTION_VIEW, url.toUri()).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         context.startActivity(intent)
@@ -393,7 +418,7 @@ private fun SettingsSetup(
         "Notification Listener Health",
         "Permission=${setupState.hasNotificationListener}, connected=${setupState.isNotificationListenerConnected}",
         Icons.Default.Notifications
-    ) { }
+    )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = onRebindListener, shape = RoundedCornerShape(12.dp)) { Text("Rebind") }
         TextButton(onClick = onOpenListenerSettings) { Text("Open Settings") }
@@ -433,14 +458,12 @@ private fun SettingsSetup(
         granted = setupState.hasFineLocation,
         onGrantClick = onRequestFineLocation
     )
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        PermissionRow(
-            title = "Background Location",
-            description = "Needed when speed trigger runs with app in background.",
-            granted = setupState.hasBackgroundLocation,
-            onGrantClick = onRequestBackgroundLocation
-        )
-    }
+    PermissionRow(
+        title = "Background Location",
+        description = "Needed when speed trigger runs with app in background.",
+        granted = setupState.hasBackgroundLocation,
+        onGrantClick = onRequestBackgroundLocation
+    )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         PermissionRow(
             title = "Bluetooth Connect",
@@ -456,7 +479,7 @@ private fun SettingsSetup(
         "Supported Apps",
         "$installedCount/${setupState.supportedApps.size} supported apps detected",
         Icons.AutoMirrored.Filled.Chat
-    ) { }
+    )
     if (installedCount == 0) {
         Text(
             "No supported messaging app detected yet.",
@@ -476,7 +499,7 @@ private fun SettingsSetup(
             }
             Icon(
                 imageVector = if (app.isInstalled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-                contentDescription = null,
+                contentDescription = if (app.isInstalled) "Installed" else "Not installed",
                 tint = if (app.isInstalled) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline
             )
         }
@@ -547,7 +570,7 @@ private fun SettingsPreferences(
             Switch(checked = replyInGroups, onCheckedChange = onSetReplyInGroups)
         }
     }
-    EntryCard("History Retention", "Select how long reply logs are kept", Icons.Default.Info) { }
+    EntryCard("History Retention", "Select how long reply logs are kept", Icons.Default.Info)
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(1 to "1 Day", 7 to "7 Days", 30 to "30 Days", -1 to "Never").forEach { (days, label) ->
             FilterChip(
@@ -564,24 +587,40 @@ private fun SettingsPreferences(
 private fun SettingsAutomation(
     speedThreshold: Int,
     onSetSpeedThreshold: (Int) -> Unit,
+    hasBluetoothConnect: Boolean,
+    onRequestBluetooth: () -> Unit,
     activeBluetoothDevices: Set<String>,
     pairedDevices: List<Pair<String, String>>,
     onToggleBluetooth: (String) -> Unit
 ) {
     PaneHint("Configure automatic driving-mode triggers.")
-    EntryCard("Speed-Based Auto-Start", "Current threshold: $speedThreshold km/h", Icons.Default.DirectionsCar) { }
+    val thresholdDescription = if (speedThreshold == 0) {
+        "Current threshold: Off"
+    } else {
+        "Current threshold: $speedThreshold km/h"
+    }
+    EntryCard("Speed-Based Auto-Start", thresholdDescription, Icons.Default.DirectionsCar)
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(0 to "Off", 15 to "15", 30 to "30", 50 to "50").forEach { (value, label) ->
             FilterChip(
                 selected = speedThreshold == value,
                 onClick = { onSetSpeedThreshold(value) },
-                label = { Text("$label km/h", fontSize = 12.sp) },
+                label = { Text(if (value == 0) label else "$label km/h", fontSize = 12.sp) },
                 modifier = Modifier.weight(1f)
             )
         }
     }
-    EntryCard("Car Bluetooth Triggers", "Select paired devices", Icons.Default.Bluetooth) { }
-    if (pairedDevices.isEmpty()) {
+    EntryCard("Car Bluetooth Triggers", "Select paired devices", Icons.Default.Bluetooth)
+    if (!hasBluetoothConnect && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Text(
+            "Bluetooth Connect permission is required to list paired car devices.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+        OutlinedButton(onClick = onRequestBluetooth, shape = RoundedCornerShape(12.dp)) {
+            Text("Grant Bluetooth Permission")
+        }
+    } else if (pairedDevices.isEmpty()) {
         Text("No paired Bluetooth devices found.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     } else {
         pairedDevices.forEach { (name, address) ->
@@ -598,7 +637,7 @@ private fun SettingsAutomation(
                 }
                 Checkbox(
                     checked = activeBluetoothDevices.contains(address),
-                    onCheckedChange = { onToggleBluetooth(address) }
+                    onCheckedChange = null
                 )
             }
         }
@@ -633,6 +672,7 @@ private fun SettingsReliability(
 @Composable
 private fun SettingsDebugging(
     debugLogsEnabled: Boolean,
+    isServiceEnabled: Boolean,
     isDriving: Boolean,
     debugLogText: String,
     diagnosticsSnapshot: String,
@@ -656,12 +696,24 @@ private fun SettingsDebugging(
         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Simulate Driving", fontWeight = FontWeight.Bold)
-                Text("Use manual simulation for testing without moving.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (isServiceEnabled) {
+                        "Use manual simulation for testing without moving."
+                    } else {
+                        "Enable the monitoring service first to simulate driving."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            Switch(checked = isDriving, onCheckedChange = onSetDrivingSimulation)
+            Switch(
+                checked = isDriving,
+                onCheckedChange = onSetDrivingSimulation,
+                enabled = isServiceEnabled
+            )
         }
     }
-    EntryCard("Quick Diagnostics Snapshot", "Copy compact status for support", Icons.Default.CompassCalibration) { }
+    EntryCard("Quick Diagnostics Snapshot", "Copy compact status for support", Icons.Default.CompassCalibration)
     Text(
         diagnosticsSnapshot,
         style = MaterialTheme.typography.bodySmall,
@@ -672,7 +724,7 @@ private fun SettingsDebugging(
     )
     Button(onClick = onCopySnapshot, shape = RoundedCornerShape(12.dp)) { Text("Copy Snapshot") }
 
-    EntryCard("Debug Logs", "Copy or clear event logs", Icons.Default.Notifications) { }
+    EntryCard("Debug Logs", "Copy or clear event logs", Icons.Default.Notifications)
     Text(
         debugLogText,
         style = MaterialTheme.typography.bodySmall,
@@ -692,11 +744,12 @@ private fun SettingsUpdatesAbout(
     updateState: UpdateCheckUiState,
     onCheckUpdates: () -> Unit,
     onStartDownload: () -> Unit,
+    onInstallDownloaded: () -> Unit,
     onCancelDownload: () -> Unit,
     onOpenLink: (String) -> Unit
 ) {
     PaneHint("Check GitHub releases and view installed version details.")
-    EntryCard("GitHub Update Check", "Installed ${updateState.installedTag}", Icons.Default.Info) { }
+    EntryCard("GitHub Update Check", "Installed ${updateState.installedTag}", Icons.Default.Info)
     Text("Latest: ${updateState.latestTag ?: "Not checked yet"}", style = MaterialTheme.typography.bodySmall)
     updateState.message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall)
@@ -706,23 +759,36 @@ private fun SettingsUpdatesAbout(
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(
             onClick = onCheckUpdates,
-            enabled = !updateState.isChecking,
+            enabled = !updateState.isChecking && !updateState.isDownloading && !updateState.isVerifying,
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text(if (updateState.isChecking) "Checking..." else "Check Updates")
+            Text(
+                if (updateState.isChecking) {
+                    stringResource(R.string.updates_check_button_busy)
+                } else {
+                    stringResource(R.string.updates_check_button)
+                }
+            )
         }
         if (updateState.canStartDownload) {
             Button(
                 onClick = onStartDownload,
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Download & install")
+                Text(stringResource(R.string.updates_download_install_button))
+            }
+        } else if (updateState.canInstallDownloaded) {
+            Button(
+                onClick = onInstallDownloaded,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(stringResource(R.string.updates_download_install_button))
             }
         }
     }
 
     // In-flight progress UI.
-    if (updateState.isDownloading) {
+    if (updateState.isDownloading || updateState.isVerifying) {
         val percent = updateState.downloadPercent.coerceIn(0, 100)
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             androidx.compose.material3.LinearProgressIndicator(
@@ -734,11 +800,15 @@ private fun SettingsUpdatesAbout(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    "Downloading update…",
+                    if (updateState.isVerifying) {
+                        stringResource(R.string.updates_install_pending_signature)
+                    } else {
+                        stringResource(R.string.updates_install_in_progress)
+                    },
                     style = MaterialTheme.typography.bodySmall
                 )
                 Text(
-                    "$percent%",
+                    stringResource(R.string.updates_progress_label, percent),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -765,12 +835,12 @@ private fun SettingsUpdatesAbout(
                 onClick = { onOpenLink(fallback) },
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Open release page")
+                Text(stringResource(R.string.updates_open_release_button))
             }
         }
     }
 
-    EntryCard("About", "DriveReply Auto-Assistant\nVersion ${updateState.installedTag}", Icons.Default.Info) { }
+    EntryCard("About", "DriveReply Auto-Assistant\nVersion ${updateState.installedTag}", Icons.Default.Info)
 }
 
 @Composable
@@ -778,14 +848,19 @@ private fun EntryCard(
     title: String,
     description: String,
     icon: ImageVector,
-    onClick: () -> Unit
+    onClick: (() -> Unit)? = null
 ) {
+    val cardModifier = if (onClick != null) {
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    } else {
+        Modifier.fillMaxWidth()
+    }
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
+        modifier = cardModifier
     ) {
         Row(
             modifier = Modifier.padding(16.dp),

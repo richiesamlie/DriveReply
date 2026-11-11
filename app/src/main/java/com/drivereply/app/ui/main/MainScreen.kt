@@ -7,8 +7,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -22,37 +22,33 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.navigation3.runtime.NavKey
-import com.drivereply.app.Templates
 import com.drivereply.app.Settings
+import com.drivereply.app.Templates
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    onItemClick: (NavKey) -> Unit,
+    onItemClick: (Any) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: MainScreenViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Trigger permission check on resume/start
-    LaunchedEffect(Unit) {
-        viewModel.refreshPermissions()
-    }
+    // Trigger permission check on resume (also fires once when entering RESUMED state)
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -63,6 +59,32 @@ fun MainScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    MainScreenContent(
+        uiState = uiState,
+        modifier = modifier,
+        onToggleService = { viewModel.toggleService(it) },
+        onToggleDriving = { viewModel.toggleDrivingState() },
+        onDismissBlocker = {},
+        onItemClick = onItemClick,
+        onSelectTemplate = { viewModel.setActiveTemplate(it) },
+        onGrantListenerAccess = { viewModel.openNotificationListenerSettings() },
+        onRebindListener = { viewModel.rebindNotificationListener() },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainScreenContent(
+    uiState: MainUiState,
+    modifier: Modifier = Modifier,
+    onToggleService: (Boolean) -> Unit = {},
+    onToggleDriving: (Boolean) -> Unit = {},
+    onDismissBlocker: (String) -> Unit = {},
+    onItemClick: (Any) -> Unit = {},
+    onSelectTemplate: (String) -> Unit = {},
+    onGrantListenerAccess: () -> Unit = {},
+    onRebindListener: () -> Unit = {},
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -102,7 +124,7 @@ fun MainScreen(
             StatusCard(
                 isServiceEnabled = uiState.isServiceEnabled,
                 isDriving = uiState.isDriving,
-                onToggleService = { viewModel.toggleService(it) }
+                onToggleService = onToggleService
             )
 
             // Quick Stats
@@ -140,8 +162,8 @@ fun MainScreen(
                         uiState.templates.forEach { template ->
                             FilterChip(
                                 selected = uiState.activeTemplate?.id == template.id,
-                                onClick = { viewModel.setActiveTemplate(template.id) },
-                                label = { Text(template.name) }
+                                onClick = { onSelectTemplate(template.id) },
+                                label = { Text(template.name, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                             )
                         }
                     }
@@ -156,9 +178,9 @@ fun MainScreen(
                     showGrantListenerAccess = !uiState.hasNotificationListener,
                     showRebindListener = uiState.hasNotificationListener && !uiState.isNotificationListenerConnected,
                     showOpenTemplates = uiState.activeTemplate == null,
-                    onEnableService = { viewModel.toggleService(true) },
-                    onGrantListenerAccess = { viewModel.openNotificationListenerSettings() },
-                    onRebindListener = { viewModel.rebindNotificationListener() },
+                    onEnableService = { onToggleService(true) },
+                    onGrantListenerAccess = onGrantListenerAccess,
+                    onRebindListener = onRebindListener,
                     onOpenTemplates = { onItemClick(Templates) }
                 )
             }
@@ -208,7 +230,7 @@ fun ReadinessCard(
             ) {
                 Icon(
                     imageVector = if (isReady) Icons.Default.CheckCircle else Icons.Default.Warning,
-                    contentDescription = null,
+                    contentDescription = if (isReady) "Ready" else "Not ready",
                     tint = contentColor
                 )
                 Text(
@@ -269,17 +291,21 @@ fun StatusCard(
     isDriving: Boolean,
     onToggleService: (Boolean) -> Unit
 ) {
-    // Pulse animation setup
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale"
-    )
+    // Only run pulse animation when service is enabled, and read state in graphicsLayer
+    val pulseScaleState: State<Float>? = if (isServiceEnabled) {
+        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+        infiniteTransition.animateFloat(
+            initialValue = 0.97f,
+            targetValue = 1.03f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "scale"
+        )
+    } else {
+        null
+    }
 
     val backgroundBrush = when {
         !isServiceEnabled -> {
@@ -289,12 +315,12 @@ fun StatusCard(
         }
         isDriving -> {
             Brush.linearGradient(
-                colors = listOf(Color(0xFF00B0FF), Color(0xFF00E676))
+                colors = listOf(Color(0xFF00796B), Color(0xFF2E7D32))
             )
         }
         else -> {
             Brush.linearGradient(
-                colors = listOf(Color(0xFFFF9100), Color(0xFFFFD600))
+                colors = listOf(Color(0xFFD84315), Color(0xFFEF6C00))
             )
         }
     }
@@ -322,7 +348,11 @@ fun StatusCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(200.dp)
-            .scale(if (isServiceEnabled) pulseScale else 1f),
+            .graphicsLayer {
+                val s = pulseScaleState?.value ?: 1f
+                scaleX = s
+                scaleY = s
+            },
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Box(
@@ -422,7 +452,9 @@ fun StatCard(
                 fontWeight = FontWeight.ExtraBold,
                 style = MaterialTheme.typography.titleLarge,
                 fontSize = 22.sp,
-                color = MaterialTheme.colorScheme.onSecondaryContainer
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
