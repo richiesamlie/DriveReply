@@ -48,18 +48,29 @@ import java.util.Base64
  *   - [cancel]             : void — aborts the in-flight download.
  *
  * Everything else is `private` or `internal` so tests can swap out the
- * transport, signature store, and notifier.
+ * transport, archive inspector, signature store, and notifier.
  */
-class ApkUpdateInstaller(
+class ApkUpdateInstaller internal constructor(
     private val context: Context,
     private val transport: UpdateTransport = HttpUrlConnectionTransport,
+    private val archiveInspector: ArchiveInspector = PackageManagerArchiveInspector(context),
     private val signatureStore: SignatureStore = PackageManagerSignatureStore(context),
     private val notifier: UpdateNotifier = SystemUpdateNotifier(context),
+    private val updatesDirOverride: File? = null,
 ) {
+
+    constructor(context: Context) : this(
+        context = context,
+        transport = HttpUrlConnectionTransport,
+        archiveInspector = PackageManagerArchiveInspector(context),
+        signatureStore = PackageManagerSignatureStore(context),
+        notifier = SystemUpdateNotifier(context),
+        updatesDirOverride = null,
+    )
 
     /** Where downloaded APKs live. Wiped on cache clear or app uninstall. */
     private val updatesDir: File
-        get() = File(context.cacheDir, "updates").apply { mkdirs() }
+        get() = (updatesDirOverride ?: File(context.cacheDir, "updates")).apply { mkdirs() }
 
     @Volatile
     private var currentConnection: HttpURLConnection? = null
@@ -245,11 +256,7 @@ class ApkUpdateInstaller(
             notifier.onVerifying(channelId, targetTag)
 
             // Gate #1: parse the downloaded APK manifest from partFile before exposing as .apk.
-            val pm = context.packageManager
-            val apkInfo: PackageInfo = try {
-                getPackageArchiveInfoCompat(pm, partFile.absolutePath)
-                    ?: throw IllegalStateException("PackageManager returned null for APK")
-            } catch (e: Exception) {
+            val inspection = archiveInspector.inspectDownloadedApk(partFile).getOrElse { e ->
                 partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.Unknown("Could not parse APK manifest: ${e.message}")
@@ -257,30 +264,27 @@ class ApkUpdateInstaller(
             }
 
             // Gate #1b: package name must match the installed app.
-            if (apkInfo.packageName != context.packageName) {
+            val expectedPkg = archiveInspector.expectedPackageName
+            if (inspection.packageName != expectedPkg) {
                 partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.WrongPackage(
-                        expected = context.packageName,
-                        actual = apkInfo.packageName,
+                        expected = expectedPkg,
+                        actual = inspection.packageName,
                     )
                 )
             }
 
             // Gate #2: versionCode direction.
-            val installedInfo = try {
-                getPackageInfoCompat(pm, context.packageName, 0)
-            } catch (e: Exception) {
+            val installedVersion = archiveInspector.installedVersionCode().getOrElse { e ->
                 partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
                     UpdateError.Unknown("Could not read installed info: ${e.message}")
                 )
             }
             when (val versionCheck = compareVersionCodes(
-                // longVersionCode was added in API 28 (P); minSdk = 29 so
-                // it is always available.
-                downloaded = apkInfo.longVersionCode,
-                installed = installedInfo.longVersionCode,
+                downloaded = inspection.versionCode,
+                installed = installedVersion,
             )) {
                 VersionCheckResult.Newer -> { /* proceed to signature check */ }
                 VersionCheckResult.AlreadyCurrent -> {
@@ -298,7 +302,7 @@ class ApkUpdateInstaller(
             }
 
             // Gate #3: signing certificate must match the installed app.
-            val verification = signatureStore.verifyMatchesInstalledApp(partFile, apkInfo)
+            val verification = signatureStore.verifyMatchesInstalledApp(partFile, inspection.apkInfo)
             if (verification !is SignatureMatchResult.Matches) {
                 partFile.delete()
                 return DownloadOnceOutcome.PermanentFailure(
@@ -461,6 +465,39 @@ class ApkUpdateInstaller(
         }
     }
 
+    internal data class ArchiveInspection(
+        val packageName: String?,
+        val versionCode: Long,
+        val apkInfo: PackageInfo?,
+    )
+
+    internal interface ArchiveInspector {
+        val expectedPackageName: String
+        fun inspectDownloadedApk(apk: File): Result<ArchiveInspection>
+        fun installedVersionCode(): Result<Long>
+    }
+
+    internal class PackageManagerArchiveInspector(private val context: Context) : ArchiveInspector {
+        override val expectedPackageName: String
+            get() = context.packageName
+
+        override fun inspectDownloadedApk(apk: File): Result<ArchiveInspection> = runCatching {
+            val pm = context.packageManager
+            val apkInfo = getPackageArchiveInfoCompat(pm, apk.absolutePath)
+                ?: throw IllegalStateException("PackageManager returned null for APK")
+            ArchiveInspection(
+                packageName = apkInfo.packageName,
+                versionCode = apkInfo.longVersionCode,
+                apkInfo = apkInfo,
+            )
+        }
+
+        override fun installedVersionCode(): Result<Long> = runCatching {
+            val installedInfo = getPackageInfoCompat(context.packageManager, context.packageName, 0)
+            installedInfo.longVersionCode
+        }
+    }
+
     /** Outcome of comparing the downloaded APK's signer to the installed app. */
     sealed interface SignatureMatchResult {
         /**
@@ -482,7 +519,7 @@ class ApkUpdateInstaller(
     fun interface SignatureStore {
         fun verifyMatchesInstalledApp(
             apk: File,
-            apkInfo: PackageInfo,
+            apkInfo: PackageInfo?,
         ): SignatureMatchResult
     }
 
@@ -494,11 +531,11 @@ class ApkUpdateInstaller(
     class PackageManagerSignatureStore(private val context: Context) : SignatureStore {
         override fun verifyMatchesInstalledApp(
             apk: File,
-            apkInfo: PackageInfo,
+            apkInfo: PackageInfo?,
         ): SignatureMatchResult {
             val pm = context.packageManager
             return try {
-                val apkSigningInfo = apkInfo.signingInfo ?: return SignatureMatchResult.NoSigners
+                val apkSigningInfo = apkInfo?.signingInfo ?: return SignatureMatchResult.NoSigners
                 val apkContentsSigners = apkSigningInfo.apkContentsSigners
                     ?.map { it.toByteArray() }
                     .orEmpty()

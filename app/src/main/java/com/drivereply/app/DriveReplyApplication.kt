@@ -3,6 +3,7 @@ package com.drivereply.app
 import android.app.Application
 import com.drivereply.app.data.AppDatabase
 import com.drivereply.app.data.PreferencesManager
+import com.drivereply.app.service.DriveReplyService
 import com.drivereply.app.util.DebugEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,11 @@ class DriveReplyApplication : Application() {
         appScope.launch {
             preferencesManager.debugLogsEnabled.collectLatest { enabled ->
                 DebugEventLogger.setEnabled(enabled)
+            }
+        }
+        appScope.launch {
+            preferencesManager.activityRecognitionEnabled.collectLatest { enabled ->
+                DriveReplyService.isActivityRecognitionEnabled = enabled
             }
         }
         appScope.launch(Dispatchers.IO) {

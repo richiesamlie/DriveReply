@@ -5,9 +5,9 @@ Generate the legacy mipmap launcher icons (PNG) for DriveReply.
 This is a *visual* companion to the adaptive icon vector drawables:
   - app/src/main/res/drawable/ic_launcher_foreground.xml
   - app/src/main/res/drawable/ic_launcher_background.xml
-  - app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+  - app/src/main/res/mipmap-anydpi/ic_launcher.xml
 
-Why a script: minSdk = 29 means adaptive icons (mipmap-anydpi-v26) cover
+Why a script: minSdk = 29 means adaptive icons (mipmap-anydpi) cover
 all supported devices, but some OEM launchers and the App Info screen still
 prefer the legacy mipmap PNGs. We derive them deterministically from the
 same design constants as the vector, so the two never drift.

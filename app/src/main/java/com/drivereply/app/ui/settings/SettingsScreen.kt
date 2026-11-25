@@ -116,6 +116,7 @@ fun SettingsScreen(
     val retentionDays by viewModel.logRetentionDays.collectAsStateWithLifecycle()
     val activeBluetoothDevices by viewModel.bluetoothDevices.collectAsStateWithLifecycle()
     val speedThreshold by viewModel.speedActivationThreshold.collectAsStateWithLifecycle()
+    val activityRecognitionEnabled by viewModel.activityRecognitionEnabled.collectAsStateWithLifecycle()
     val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
     val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
     val isDriving by viewModel.isDriving.collectAsStateWithLifecycle()
@@ -265,6 +266,8 @@ fun SettingsScreen(
                     onSetRetentionDays = viewModel::setLogRetentionDays
                 )
                 SettingsPane.AUTOMATION -> SettingsAutomation(
+                    activityRecognitionEnabled = activityRecognitionEnabled,
+                    onSetActivityRecognition = viewModel::setActivityRecognitionEnabled,
                     speedThreshold = speedThreshold,
                     onSetSpeedThreshold = viewModel::setSpeedActivationThreshold,
                     hasBluetoothConnect = setupState.hasBluetoothConnect,
@@ -373,7 +376,7 @@ private fun SettingsHome(
     EntryCard("Preferences", "Reply behavior and retention", Icons.AutoMirrored.Filled.Chat) {
         onSelect(SettingsPane.PREFERENCES)
     }
-    EntryCard("Automation", "Speed and Bluetooth triggers", Icons.Default.Speed) {
+    EntryCard("Automation", "Activity, speed, and Bluetooth triggers", Icons.Default.Speed) {
         onSelect(SettingsPane.AUTOMATION)
     }
     EntryCard("Reliability", "Battery and OEM restrictions", Icons.Default.Build) {
@@ -585,6 +588,8 @@ private fun SettingsPreferences(
 
 @Composable
 private fun SettingsAutomation(
+    activityRecognitionEnabled: Boolean,
+    onSetActivityRecognition: (Boolean) -> Unit,
     speedThreshold: Int,
     onSetSpeedThreshold: (Int) -> Unit,
     hasBluetoothConnect: Boolean,
@@ -594,6 +599,23 @@ private fun SettingsAutomation(
     onToggleBluetooth: (String) -> Unit
 ) {
     PaneHint("Configure automatic driving-mode triggers.")
+    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Activity Recognition Trigger", fontWeight = FontWeight.Bold)
+                Text(
+                    "Auto-detect vehicle entry and exit via motion sensors.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = activityRecognitionEnabled, onCheckedChange = onSetActivityRecognition)
+        }
+    }
     val thresholdDescription = if (speedThreshold == 0) {
         "Current threshold: Off"
     } else {

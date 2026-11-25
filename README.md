@@ -10,7 +10,7 @@ Built using **Kotlin**, **Jetpack Compose (Material 3)**, **Room Database**, **G
 
 ### 🚘 Intelligent Active Triggers
 - **Sensor Activity Transition**: Uses the Google Play Services Transition API to seamlessly enter driving mode when physical sensors detect a vehicle entry/exit.
-- **GPS Speed Activation**: Automatically launches driving protection when your speed exceeds a configurable threshold (e.g., 15 km/h, 25 km/h) using low-power background location polling.
+- **GPS Speed Activation**: Automatically launches driving protection when your speed exceeds a configurable threshold (15, 30, or 50 km/h; off by default) using `FusedLocationProviderClient` 10-second background location polling.
 - **Car Bluetooth Automation**: Automatically toggles driving protection on or off upon connecting to selected "Car Bluetooth" paired devices.
 - **Vehicular Exit Debounce**: Employs a 2-minute delay before exiting the driving state. This keeps the auto-reply active during brief stops (e.g., stoplights, fuel stops) and avoids battery-draining state toggles.
 
@@ -69,7 +69,7 @@ To function reliably in the background, DriveReply utilizes:
 2. **Notification Listener Access** (`NotificationListenerService`)
    - A system-level permission that allows DriveReply to inspect notification bundles and execute quick-reply actions.
 3. **Location (Fine & Background)** (`ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`)
-   - Required to perform low-power speed-based background service activation.
+   - Required when speed-based background service activation is enabled.
 4. **Bluetooth Connection** (`BLUETOOTH_CONNECT` for Android 12+)
    - Used to fetch and track paired "Car Bluetooth" MAC addresses.
 5. **Notification Post Access** (`android.permission.POST_NOTIFICATIONS` for Android 13+)

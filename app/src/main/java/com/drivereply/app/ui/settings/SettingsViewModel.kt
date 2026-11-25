@@ -125,6 +125,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             initialValue = 0
         )
 
+    val activityRecognitionEnabled: StateFlow<Boolean> = preferencesManager.activityRecognitionEnabled
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = true
+        )
+
     val debugLogsEnabled: StateFlow<Boolean> = preferencesManager.debugLogsEnabled
         .stateIn(
             scope = viewModelScope,
@@ -185,6 +192,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setSpeedActivationThreshold(threshold: Int) {
         viewModelScope.launch {
             preferencesManager.setSpeedActivationThreshold(threshold)
+        }
+    }
+
+    fun setActivityRecognitionEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesManager.setActivityRecognitionEnabled(enabled)
         }
     }
 
@@ -387,6 +400,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             appendLine("installedTag=${_updateCheckState.value.installedTag}")
             appendLine("serviceEnabled=${preferencesManager.isServiceEnabled.first()}")
             appendLine("driving=${DriveReplyService.isDriving.value}")
+            appendLine("activityRecognitionEnabled=${preferencesManager.activityRecognitionEnabled.first()}")
             appendLine("listenerPermission=${PermissionHelper.hasNotificationListenerPermission(app)}")
             appendLine("listenerConnected=${WhatsAppNotificationListener.isListenerConnected.value}")
             appendLine("activityRecognitionPermission=${PermissionHelper.hasActivityRecognitionPermission(app)}")
@@ -444,33 +458,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun detectSupportedApps(): List<SettingsSupportedAppDetection> {
-        val pm = app.packageManager
         return SupportedMessagingPackages.supportedApps.map { appDef ->
             SettingsSupportedAppDetection(
                 label = appDef.label,
                 packageName = appDef.packageName,
-                isInstalled = isPackageInstalled(pm, appDef.packageName)
+                isInstalled = isPackageInstalled(appDef.packageName)
             )
         }.sortedWith(
             compareByDescending<SettingsSupportedAppDetection> { it.isInstalled }
                 .thenBy { it.label }
         )
-    }
-
-    private fun isPackageInstalled(packageManager: PackageManager, packageName: String): Boolean {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                packageManager.getPackageInfo(
-                    packageName,
-                    PackageManager.PackageInfoFlags.of(0)
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                packageManager.getPackageInfo(packageName, 0)
-            }
-            true
-        } catch (_: Exception) {
-            false
-        }
     }
 }

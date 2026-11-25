@@ -1,21 +1,40 @@
 package com.drivereply.app.util
 
+import android.content.ContextWrapper
+import com.drivereply.app.util.ApkUpdateInstaller.ArchiveInspection
+import com.drivereply.app.util.ApkUpdateInstaller.ArchiveInspector
 import com.drivereply.app.util.ApkUpdateInstaller.SignatureMatchResult
 import com.drivereply.app.util.ApkUpdateInstaller.UpdateError
+import com.drivereply.app.util.ApkUpdateInstaller.UpdateEvent
+import com.drivereply.app.util.ApkUpdateInstaller.UpdateNotifier
 import com.drivereply.app.util.ApkUpdateInstaller.VersionCheckResult
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.IOException
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Base64
 
 /**
- * Pure-JVM unit tests for the helpers used by the seamless in-app update
- * flow. The full installer (HTTP download, PackageManager signature read,
- * system install intent) is exercised by the Compose UI and instrumented
- * tests; here we cover the deterministic, Android-free pieces.
+ * Pure-JVM unit tests for [ApkUpdateInstaller] covering signature helpers,
+ * version comparison, backoff math, and end-to-end [ApkUpdateInstaller.downloadAndVerify]
+ * pipeline behavior using fake transport, archive inspector, signature store,
+ * and notifier implementations.
  */
 class ApkUpdateInstallerTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     // ------------------------------------------------------------------
     //  SignatureMatchResult
@@ -312,5 +331,196 @@ class ApkUpdateInstallerTest {
         val worstCaseMs = ApkUpdateInstaller.computeBackoffMs(lastAttempt)
         assertTrue("worst-case backoff should be reasonable: $worstCaseMs ms",
             worstCaseMs <= 10_000L)
+    }
+
+    // ------------------------------------------------------------------
+    //  End-to-end downloadAndVerify pipeline (fake transport & verifier)
+    // ------------------------------------------------------------------
+
+    @Test
+    fun downloadAndVerify_happyPath_promotesPartFileAndCleansStaleFiles() = runTest {
+        val updatesDir = tempFolder.newFolder("updates")
+        val stale = File(updatesDir, "DriveReply-v2.0.46-old.apk").apply { writeText("stale") }
+        val payload = ByteArray(1024) { 7 }
+        val notifier = RecordingNotifier()
+        val installer = buildInstaller(
+            updatesDir = updatesDir,
+            responses = ArrayDeque(listOf(FakeResponse.Success(payload))),
+            inspector = FakeArchiveInspector("com.drivereply.app", 48L, 47L),
+            signatureResult = SignatureMatchResult.Matches("cert-sha"),
+            notifier = notifier
+        )
+
+        val events = installer.downloadAndVerify("https://example.invalid/app.apk", "v2.0.48").toList()
+
+        assertFalse("stale file should be deleted", stale.exists())
+        assertFalse("temp .part file should be promoted", File(updatesDir, "DriveReply-v2.0.48.apk.part").exists())
+        assertTrue(events.first() is UpdateEvent.Preparing)
+        assertTrue(events.any { it is UpdateEvent.Progress && it.percent == 100 })
+        assertTrue(events.any { it is UpdateEvent.Verifying })
+        val ready = events.last() as UpdateEvent.Ready
+        assertEquals("cert-sha", ready.certificateSha256)
+        assertEquals(payload.size.toLong(), ready.target.length())
+        assertEquals("cert-sha", notifier.readySha)
+    }
+
+    @Test
+    fun downloadAndVerify_retriesTransient503ThenSucceeds() = runTest {
+        val updatesDir = tempFolder.newFolder("updates")
+        val payload = "apk-bytes".toByteArray()
+        var attempts = 0
+        val queue = ArrayDeque<FakeResponse>(
+            listOf(FakeResponse.Status(503), FakeResponse.Success(payload))
+        )
+        val installer = ApkUpdateInstaller(
+            context = ContextWrapper(null),
+            transport = {
+                attempts++
+                queue.removeFirst().toConnection()
+            },
+            archiveInspector = FakeArchiveInspector("com.drivereply.app", 48L, 47L),
+            signatureStore = { _, _ -> SignatureMatchResult.Matches("ok") },
+            notifier = RecordingNotifier(),
+            updatesDirOverride = updatesDir
+        )
+
+        val events = installer.downloadAndVerify("https://example.invalid/app.apk", "v2.0.48").toList()
+
+        assertEquals(2, attempts)
+        assertTrue(events.last() is UpdateEvent.Ready)
+    }
+
+    @Test
+    fun downloadAndVerify_failsImmediatelyOnPermanent404() = runTest {
+        val updatesDir = tempFolder.newFolder("updates")
+        var attempts = 0
+        val installer = ApkUpdateInstaller(
+            context = ContextWrapper(null),
+            transport = {
+                attempts++
+                FakeResponse.Status(404).toConnection()
+            },
+            archiveInspector = FakeArchiveInspector("com.drivereply.app", 48L, 47L),
+            signatureStore = { _, _ -> SignatureMatchResult.Matches("ok") },
+            notifier = RecordingNotifier(),
+            updatesDirOverride = updatesDir
+        )
+
+        val events = installer.downloadAndVerify("https://example.invalid/app.apk", "v2.0.48").toList()
+
+        assertEquals(1, attempts)
+        val failed = events.last() as UpdateEvent.Failed
+        assertEquals(UpdateError.HttpStatus(404), failed.error)
+    }
+
+    @Test
+    fun downloadAndVerify_rejectsWrongPackageAndDeletesPartFile() = runTest {
+        val updatesDir = tempFolder.newFolder("updates")
+        val installer = buildInstaller(
+            updatesDir = updatesDir,
+            responses = ArrayDeque(listOf(FakeResponse.Success("bad".toByteArray()))),
+            inspector = FakeArchiveInspector("com.evil.clone", 99L, 47L),
+            signatureResult = SignatureMatchResult.Matches("ok"),
+            notifier = RecordingNotifier()
+        )
+
+        val events = installer.downloadAndVerify("https://example.invalid/app.apk", "v2.0.48").toList()
+
+        val failed = events.last() as UpdateEvent.Failed
+        assertEquals(UpdateError.WrongPackage("com.drivereply.app", "com.evil.clone"), failed.error)
+        assertFalse(File(updatesDir, "DriveReply-v2.0.48.apk").exists())
+        assertFalse(File(updatesDir, "DriveReply-v2.0.48.apk.part").exists())
+    }
+
+    @Test
+    fun downloadAndVerify_rejectsDowngradeAndSignatureMismatch() = runTest {
+        val updatesDir = tempFolder.newFolder("updates")
+        val downgradeInstaller = buildInstaller(
+            updatesDir = updatesDir,
+            responses = ArrayDeque(listOf(FakeResponse.Success("old".toByteArray()))),
+            inspector = FakeArchiveInspector("com.drivereply.app", 40L, 47L),
+            signatureResult = SignatureMatchResult.Matches("ok"),
+            notifier = RecordingNotifier()
+        )
+        val downgradeEvents = downgradeInstaller.downloadAndVerify("https://example.invalid/old.apk", "v2.0.40").toList()
+        assertEquals(UpdateError.Downgrade(40L, 47L), (downgradeEvents.last() as UpdateEvent.Failed).error)
+
+        val mismatchInstaller = buildInstaller(
+            updatesDir = updatesDir,
+            responses = ArrayDeque(listOf(FakeResponse.Success("bad-sig".toByteArray()))),
+            inspector = FakeArchiveInspector("com.drivereply.app", 48L, 47L),
+            signatureResult = SignatureMatchResult.Mismatch,
+            notifier = RecordingNotifier()
+        )
+        val mismatchEvents = mismatchInstaller.downloadAndVerify("https://example.invalid/bad.apk", "v2.0.48").toList()
+        assertTrue((mismatchEvents.last() as UpdateEvent.Failed).error is UpdateError.SignatureMismatch)
+        assertFalse(File(updatesDir, "DriveReply-v2.0.48.apk").exists())
+        assertFalse(File(updatesDir, "DriveReply-v2.0.48.apk.part").exists())
+    }
+
+    private fun buildInstaller(
+        updatesDir: File,
+        responses: ArrayDeque<FakeResponse>,
+        inspector: ArchiveInspector,
+        signatureResult: SignatureMatchResult,
+        notifier: UpdateNotifier
+    ): ApkUpdateInstaller {
+        return ApkUpdateInstaller(
+            context = ContextWrapper(null),
+            transport = { responses.removeFirst().toConnection() },
+            archiveInspector = inspector,
+            signatureStore = { _, _ -> signatureResult },
+            notifier = notifier,
+            updatesDirOverride = updatesDir
+        )
+    }
+
+    private sealed interface FakeResponse {
+        data class Success(val bytes: ByteArray) : FakeResponse
+        data class Status(val code: Int) : FakeResponse
+
+        fun toConnection(): HttpURLConnection = when (this) {
+            is Success -> FakeHttpURLConnection(200, bytes)
+            is Status -> FakeHttpURLConnection(code, ByteArray(0))
+        }
+    }
+
+    private class FakeHttpURLConnection(
+        private val status: Int,
+        private val body: ByteArray
+    ) : HttpURLConnection(URL("https://example.invalid/app.apk")) {
+        override fun disconnect() {}
+        override fun usingProxy(): Boolean = false
+        override fun connect() {}
+        override fun getResponseCode(): Int = status
+        override fun getContentLengthLong(): Long = body.size.toLong()
+        override fun getInputStream(): InputStream {
+            if (status !in 200..299) throw IOException("HTTP $status")
+            return ByteArrayInputStream(body)
+        }
+    }
+
+    private class FakeArchiveInspector(
+        private val packageName: String?,
+        private val versionCode: Long,
+        private val installedCode: Long,
+        override val expectedPackageName: String = "com.drivereply.app"
+    ) : ArchiveInspector {
+        override fun inspectDownloadedApk(apk: File): Result<ArchiveInspection> =
+            Result.success(ArchiveInspection(packageName, versionCode, null))
+
+        override fun installedVersionCode(): Result<Long> =
+            Result.success(installedCode)
+    }
+
+    private class RecordingNotifier : UpdateNotifier {
+        var readySha: String? = null
+        override fun onPreparing(channelId: String, targetTag: String) {}
+        override fun onProgress(channelId: String, targetTag: String, percent: Int) {}
+        override fun onVerifying(channelId: String, targetTag: String) {}
+        override fun onReady(channelId: String, targetTag: String, certificateSha256: String) {
+            readySha = certificateSha256
+        }
+        override fun onFailed(channelId: String, targetTag: String, reason: String) {}
     }
 }

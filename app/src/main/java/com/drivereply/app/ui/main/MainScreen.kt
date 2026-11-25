@@ -291,12 +291,12 @@ fun StatusCard(
     isDriving: Boolean,
     onToggleService: (Boolean) -> Unit
 ) {
-    // Only run pulse animation when service is enabled, and read state in graphicsLayer
-    val pulseScaleState: State<Float>? = if (isServiceEnabled) {
+    // Only pulse the inner status icon while actively driving so interactive card controls stay steady
+    val pulseScaleState: State<Float>? = if (isServiceEnabled && isDriving) {
         val infiniteTransition = rememberInfiniteTransition(label = "pulse")
         infiniteTransition.animateFloat(
-            initialValue = 0.97f,
-            targetValue = 1.03f,
+            initialValue = 0.94f,
+            targetValue = 1.06f,
             animationSpec = infiniteRepeatable(
                 animation = tween(1200, easing = LinearEasing),
                 repeatMode = RepeatMode.Reverse
@@ -347,12 +347,7 @@ fun StatusCard(
         shape = RoundedCornerShape(32.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(200.dp)
-            .graphicsLayer {
-                val s = pulseScaleState?.value ?: 1f
-                scaleX = s
-                scaleY = s
-            },
+            .height(200.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Box(
@@ -369,6 +364,11 @@ fun StatusCard(
                 Box(
                     modifier = Modifier
                         .size(60.dp)
+                        .graphicsLayer {
+                            val s = pulseScaleState?.value ?: 1f
+                            scaleX = s
+                            scaleY = s
+                        }
                         .background(Color.White.copy(alpha = 0.25f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {

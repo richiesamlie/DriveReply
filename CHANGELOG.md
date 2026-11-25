@@ -5,7 +5,26 @@ All notable changes to DriveReply will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.48] — 2026-11-25
+
+### Added
+- Multi-rule template editor in `EditTemplateScreen` with Material 3 `TimePicker` windows, day chips, and per-contact overrides (`TemplateRuleDao.replaceRulesForTemplate`).
+- `Activity Recognition Trigger` toggle in **Settings → Automation**, wired end-to-end with onboarding detection mode (`ACTIVITY` / `BLUETOOTH` / `MANUAL`).
+- Y-axis tick labels on the Analytics 7-day spline chart.
+- End-to-end JVM unit tests for `ApkUpdateInstaller.downloadAndVerify` and `DriveReplyService` multi-trigger / cooldown state.
+
+### Changed
+- Kept `StatusCard` and its toggle switch stationary while pulsing only the inner status icon during active driving.
+- Merged `mipmap-anydpi-v26` into `mipmap-anydpi` (cleaning obsolete SDK resource qualifiers for `minSdk = 29`).
+
+## [2.0.47] — 2026-11-11
+
+### Security & Reliability
+- Upgraded Room DB to v4 with indexed tables, synchronous prepopulation, and automatic log retention pruning.
+- Hardened `ApkUpdateInstaller` (`.apk.part` staging, `sanitizeTag`, HTTPS GitHub host allowlist, `MAX_APK_BYTES` cap, key-rotation/multi-signer checks) and `DebugEventLogger` (opt-in by default, PII redaction).
+- Added Android 14+/15+ `specialUse|location` foreground service declarations, R8 `NavKey`/`kotlinx.serialization` ProGuard rules, and signed-only CI release publication.
+
+## [2.0.0] — 2026-06-17
 
 ### ⚠️ BREAKING CHANGE: package migration `com.example.drivereply` → `com.drivereply.app`
 

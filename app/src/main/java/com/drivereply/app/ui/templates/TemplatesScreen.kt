@@ -260,6 +260,9 @@ private fun buildRuleSummary(rules: List<TemplateRule>): List<String> {
 
     val contacts = rules.mapNotNull { it.contactName?.takeIf { name -> name.isNotBlank() } }.distinct()
     summaries.add(if (contacts.isEmpty()) "All contacts" else "${contacts.size} contact(s)")
+    if (rules.size > 1) {
+        summaries.add("${rules.size} rules")
+    }
 
     return summaries
 }
