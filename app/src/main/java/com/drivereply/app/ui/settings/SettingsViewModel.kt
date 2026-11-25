@@ -351,10 +351,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     }
                     is ApkUpdateInstaller.UpdateEvent.Failed -> {
                         DebugEventLogger.log("Updates", "Download failed: ${event.error.message}")
+                        val errorText = when (event.error) {
+                            is ApkUpdateInstaller.UpdateError.SignatureMismatch ->
+                                app.getString(R.string.updates_install_signature_mismatch)
+                            else -> event.error.message
+                        }
                         _updateCheckState.value = _updateCheckState.value.copy(
                             isDownloading = false,
                             isVerifying = false,
-                            downloadError = event.error.message
+                            downloadError = errorText
                         )
                     }
                 }

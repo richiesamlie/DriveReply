@@ -19,5 +19,4 @@
     <string name="updates_channel_name">App updates</string>
     <string name="updates_channel_description">Drives the seamless in-app update download.</string>
     <string name="updates_notification_title">Downloading DriveReply %1$s</string>
-    <string name="updates_notification_text">Tap to view progress</string>
 </resources>

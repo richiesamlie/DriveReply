@@ -178,6 +178,24 @@ def render_master() -> Image.Image:
     return img
 
 
+def apply_rounded_square_mask(img: Image.Image) -> Image.Image:
+    """Apply an inset rounded-square alpha mask for legacy ic_launcher PNGs."""
+    scale = 2
+    size = MASTER * scale
+    margin = round(size * 0.04)
+    radius = round(size * 0.20)
+    mask_hi = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask_hi).rounded_rectangle(
+        [margin, margin, size - 1 - margin, size - 1 - margin],
+        radius=radius,
+        fill=255,
+    )
+    mask = mask_hi.resize((MASTER, MASTER), Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
+    return out
+
+
 def apply_circular_mask(img: Image.Image) -> Image.Image:
     """Apply a circular alpha mask (used for the round mipmap variant)."""
     mask = Image.new("L", (MASTER, MASTER), 0)
@@ -217,10 +235,11 @@ def main(argv: list[str]) -> int:
 
     print(f"Rendering master icon ({MASTER}x{MASTER})…")
     master = render_master()
+    master_square = apply_rounded_square_mask(master)
     master_round = apply_circular_mask(master)
 
     print(f"Writing mipmaps under {res_root}…")
-    written = write_mipmaps(master, master_round, res_root)
+    written = write_mipmaps(master_square, master_round, res_root)
     for path in written:
         rel = path.relative_to(repo_root)
         print(f"  wrote {rel} ({path.stat().st_size} bytes)")

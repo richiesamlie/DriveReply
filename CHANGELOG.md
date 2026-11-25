@@ -5,6 +5,18 @@ All notable changes to DriveReply will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.49] — 2026-11-25
+
+### Changed
+- Upgraded Gradle wrapper to `9.9.2` (with `100755` POSIX permissions and LF line endings on `gradlew`), Android Gradle Plugin to `9.5.2`, Kotlin to `2.4.21`, KSP to `2.3.14`, and AndroidX/Compose dependencies in `gradle/libs.versions.toml` to latest stable releases.
+- Raised `compileSdk` to `37.2` and `targetSdk` to `37`.
+- Upgraded GitHub Actions workflows (`ci.yml` and `release.yml`) to Node 24–compatible action major versions (`checkout@v7`, `setup-java@v6`, `setup-gradle@v6`, `dependency-submission@v6`, `upload-artifact@v7`, `action-gh-release@v3`) and fixed the invalid `build-scan-publish-action-token` input.
+
+### Fixed
+- Wired `R.string.updates_install_signature_mismatch` in `SettingsViewModel` and `R.string.updates_install_no_activity` in `ApkUpdateInstaller`, and removed unused `updates_notification_text` from `strings.xml`.
+- Added rounded-square corner masking in `tools/generate_launcher_icons.py` and regenerated legacy `mipmap-*/ic_launcher.png` icons to resolve `IconLauncherShape` warnings.
+- Migrated `MainScreenTest` to `androidx.compose.ui.test.junit4.v2.createAndroidComposeRule` to clear Kotlin compiler deprecation warnings.
+
 ## [2.0.48] — 2026-11-25
 
 ### Added

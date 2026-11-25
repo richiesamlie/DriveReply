@@ -360,7 +360,10 @@ class ApkUpdateInstaller internal constructor(
             context.startActivity(intent)
             Result.success(Unit)
         } catch (e: ActivityNotFoundException) {
-            Result.failure(e)
+            Result.failure(
+                ActivityNotFoundException(context.getString(R.string.updates_install_no_activity))
+                    .apply { initCause(e) }
+            )
         }
     }
 
