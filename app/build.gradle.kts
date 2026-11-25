@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 val releaseVersionCode: Int = System.getenv("RELEASE_VERSION_CODE")
     ?.toIntOrNull()
     ?.coerceAtLeast(1)
-    ?: 48
+    ?: 49
 
 // DriveReply 2.0 ships under a new applicationId: `com.drivereply.app`.
 // (The pre-2.0 package `com.example.drivereply` was a Play-blocking
@@ -33,11 +33,15 @@ val releaseVersionName: String = System.getenv("RELEASE_VERSION_NAME")
 
 android {
     namespace = "com.drivereply.app"
-    compileSdk = 36
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
     defaultConfig {
         applicationId = "com.drivereply.app"
         minSdk = 29
-        targetSdk = 36
+        targetSdk = 37
         versionCode = releaseVersionCode
         versionName = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
