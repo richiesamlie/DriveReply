@@ -21,6 +21,7 @@ class PreferencesManager(private val context: Context) {
         private val KEY_LOG_RETENTION_DAYS = intPreferencesKey("log_retention_days")
         private val KEY_BLUETOOTH_DEVICES = stringSetPreferencesKey("bluetooth_devices")
         private val KEY_SPEED_ACTIVATION_THRESHOLD = intPreferencesKey("speed_activation_threshold")
+        private val KEY_ACTIVITY_RECOGNITION_ENABLED = booleanPreferencesKey("activity_recognition_enabled")
         private val KEY_DEBUG_LOGS_ENABLED = booleanPreferencesKey("debug_logs_enabled")
         private val KEY_HAS_COMPLETED_ONBOARDING = booleanPreferencesKey("has_completed_onboarding")
     }
@@ -43,6 +44,10 @@ class PreferencesManager(private val context: Context) {
 
     val speedActivationThreshold: Flow<Int> = context.dataStore.data.map { prefs ->
         prefs[KEY_SPEED_ACTIVATION_THRESHOLD] ?: 0 // 0 means disabled
+    }
+
+    val activityRecognitionEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ACTIVITY_RECOGNITION_ENABLED] ?: true
     }
 
     val debugLogsEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -80,6 +85,12 @@ class PreferencesManager(private val context: Context) {
     suspend fun setSpeedActivationThreshold(threshold: Int) {
         context.dataStore.edit { prefs ->
             prefs[KEY_SPEED_ACTIVATION_THRESHOLD] = threshold
+        }
+    }
+
+    suspend fun setActivityRecognitionEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_ACTIVITY_RECOGNITION_ENABLED] = enabled
         }
     }
 

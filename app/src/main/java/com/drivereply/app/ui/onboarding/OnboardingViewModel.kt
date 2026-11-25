@@ -57,6 +57,8 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
             }
 
             val enableService = !detectionMode.equals("MANUAL", ignoreCase = true)
+            val enableActivityRecognition = detectionMode.equals("ACTIVITY", ignoreCase = true)
+            preferencesManager.setActivityRecognitionEnabled(enableActivityRecognition)
             preferencesManager.setServiceEnabled(enableService)
             if (enableService) {
                 DriveReplyService.start(app)

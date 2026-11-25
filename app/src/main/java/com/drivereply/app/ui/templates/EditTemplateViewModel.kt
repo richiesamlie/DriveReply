@@ -21,37 +21,77 @@ class EditTemplateViewModel(application: Application) : AndroidViewModel(applica
     private val _templateState = MutableStateFlow<MessageTemplate?>(null)
     val templateState: StateFlow<MessageTemplate?> = _templateState.asStateFlow()
 
-    private val _ruleState = MutableStateFlow<TemplateRule?>(null)
-    val ruleState: StateFlow<TemplateRule?> = _ruleState.asStateFlow()
+    private val _rulesState = MutableStateFlow<List<TemplateRule>>(emptyList())
+    val rulesState: StateFlow<List<TemplateRule>> = _rulesState.asStateFlow()
+
+    private val _initialRules = MutableStateFlow<List<TemplateRule>>(emptyList())
+    val initialRules: StateFlow<List<TemplateRule>> = _initialRules.asStateFlow()
 
     private val _isSaved = MutableStateFlow(false)
     val isSaved: StateFlow<Boolean> = _isSaved.asStateFlow()
 
     private val _isSaving = MutableStateFlow(false)
+    private var loadedTemplateKey: String? = null
 
     fun loadTemplate(templateId: String?) {
+        val targetKey = templateId ?: "__new__"
+        if (loadedTemplateKey == targetKey) return
+        loadedTemplateKey = targetKey
+
         _templateState.value = null
-        _ruleState.value = null
+        _rulesState.value = emptyList()
+        _initialRules.value = emptyList()
         if (templateId == null) {
             return
         }
         viewModelScope.launch {
             val template = templateDao.getById(templateId)
-            val rule = templateRuleDao.getByTemplateId(templateId).firstOrNull()
-            _ruleState.value = rule
+            val existingRules = templateRuleDao.getByTemplateId(templateId)
+            _rulesState.value = existingRules
+            _initialRules.value = existingRules
             _templateState.value = template
         }
     }
 
-    fun saveTemplate(
-        name: String,
-        body: String,
+    fun saveRuleDraft(
+        ruleId: String?,
         existingId: String?,
-        contactName: String? = null,
-        daysOfWeek: String? = null,
-        startTime: Long? = null,
-        endTime: Long? = null
+        contactName: String?,
+        selectedDays: Set<Int>,
+        startTimeMs: Long?,
+        endTimeMs: Long?
     ) {
+        val cleanContact = contactName?.trim()?.takeIf { it.isNotBlank() }
+        val cleanDays = selectedDays
+            .filter { it in 1..7 }
+            .sorted()
+            .takeIf { it.isNotEmpty() && it.size < 7 }
+            ?.joinToString(",")
+        val validWindow = startTimeMs != null && endTimeMs != null
+        val targetTemplateId = existingId ?: ""
+
+        val draft = TemplateRule(
+            id = ruleId ?: UUID.randomUUID().toString(),
+            templateId = targetTemplateId,
+            contactName = cleanContact,
+            daysOfWeek = cleanDays,
+            startTime = if (validWindow) startTimeMs else null,
+            endTime = if (validWindow) endTimeMs else null
+        )
+
+        val current = _rulesState.value
+        _rulesState.value = if (ruleId != null && current.any { it.id == ruleId }) {
+            current.map { if (it.id == ruleId) draft else it }
+        } else {
+            current + draft
+        }
+    }
+
+    fun deleteRuleDraft(ruleId: String) {
+        _rulesState.value = _rulesState.value.filterNot { it.id == ruleId }
+    }
+
+    fun saveTemplate(name: String, body: String, existingId: String?) {
         if (name.isBlank() || body.isBlank() || _isSaving.value) return
         _isSaving.value = true
 
@@ -76,24 +116,7 @@ class EditTemplateViewModel(application: Application) : AndroidViewModel(applica
                     templateDao.insert(newTemplate)
                 }
 
-                templateRuleDao.deleteByTemplateId(targetId)
-                val cleanContact = contactName?.trim()?.takeIf { it.isNotBlank() }
-                val cleanDays = daysOfWeek?.trim()?.takeIf { it.isNotBlank() }
-                val validStart = if (startTime != null && endTime != null) startTime else null
-                val validEnd = if (startTime != null && endTime != null) endTime else null
-
-                if (cleanContact != null || cleanDays != null || (validStart != null && validEnd != null)) {
-                    templateRuleDao.insert(
-                        TemplateRule(
-                            templateId = targetId,
-                            contactName = cleanContact,
-                            daysOfWeek = cleanDays,
-                            startTime = validStart,
-                            endTime = validEnd
-                        )
-                    )
-                }
-
+                templateRuleDao.replaceRulesForTemplate(targetId, _rulesState.value)
                 _isSaved.value = true
             } finally {
                 _isSaving.value = false

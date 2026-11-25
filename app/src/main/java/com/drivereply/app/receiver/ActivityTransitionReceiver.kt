@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.drivereply.app.service.DriveReplyService
+import com.drivereply.app.util.DebugEventLogger
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionResult
 import com.google.android.gms.location.DetectedActivity
@@ -12,6 +13,10 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (!ActivityTransitionResult.hasResult(intent)) return
+        if (!DriveReplyService.isActivityRecognitionEnabled) {
+            DebugEventLogger.log("ActivityTransitionRx", "Ignoring activity transition while trigger is disabled")
+            return
+        }
 
         val result = ActivityTransitionResult.extractResult(intent) ?: return
 

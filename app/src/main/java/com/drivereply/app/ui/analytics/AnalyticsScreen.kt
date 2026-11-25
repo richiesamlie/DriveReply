@@ -12,7 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -241,9 +244,11 @@ fun SplineChart(
     data: List<Pair<String, Int>>,
     modifier: Modifier = Modifier
 ) {
-    val maxVal = remember(data) { (data.maxOfOrNull { it.second } ?: 0).coerceAtLeast(5) }
+    val maxVal = remember(data) { (data.maxOfOrNull { it.second } ?: 0).coerceAtLeast(4) }
     val primaryColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.outlineVariant
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val textMeasurer = rememberTextMeasurer()
     val path = remember { Path() }
     val fillPath = remember { Path() }
 
@@ -256,16 +261,16 @@ fun SplineChart(
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val width = size.width
                 val height = size.height
-                val paddingLeft = 40f
-                val paddingRight = 20f
-                val paddingTop = 20f
-                val paddingBottom = 40f
+                val paddingLeft = 36.dp.toPx()
+                val paddingRight = 12.dp.toPx()
+                val paddingTop = 14.dp.toPx()
+                val paddingBottom = 20.dp.toPx()
 
-                val chartWidth = width - paddingLeft - paddingRight
-                val chartHeight = height - paddingTop - paddingBottom
+                val chartWidth = (width - paddingLeft - paddingRight).coerceAtLeast(1f)
+                val chartHeight = (height - paddingTop - paddingBottom).coerceAtLeast(1f)
 
                 // Draw Gridlines & Y-Axis Labels
-                val gridLines = 3
+                val gridLines = 2
                 for (i in 0..gridLines) {
                     val ratio = i.toFloat() / gridLines
                     val y = paddingTop + ratio * chartHeight
@@ -274,6 +279,18 @@ fun SplineChart(
                         start = Offset(paddingLeft, y),
                         end = Offset(width - paddingRight, y),
                         strokeWidth = 1.dp.toPx()
+                    )
+                    val tickValue = ((1f - ratio) * maxVal).toInt()
+                    val measured = textMeasurer.measure(
+                        text = tickValue.toString(),
+                        style = TextStyle(color = labelColor, fontSize = 10.sp)
+                    )
+                    drawText(
+                        textLayoutResult = measured,
+                        topLeft = Offset(
+                            x = (paddingLeft - measured.size.width - 6.dp.toPx()).coerceAtLeast(0f),
+                            y = (y - measured.size.height / 2f).coerceIn(0f, height - measured.size.height)
+                        )
                     )
                 }
 

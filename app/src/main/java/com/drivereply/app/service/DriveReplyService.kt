@@ -69,6 +69,9 @@ class DriveReplyService : Service() {
         private var activityExitRunnable: Runnable? = null
 
         @Volatile
+        var isActivityRecognitionEnabled: Boolean = true
+
+        @Volatile
         private var _lastStartRequestedAtMs: Long = 0L
         val lastStartRequestedAtMs: Long get() = _lastStartRequestedAtMs
 
@@ -248,6 +251,7 @@ class DriveReplyService : Service() {
     }
 
     private var transitionPendingIntent: PendingIntent? = null
+    private var transitionsRegistered = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient? = null
@@ -265,7 +269,6 @@ class DriveReplyService : Service() {
         DebugEventLogger.log(TAG, "Service created")
         createNotificationChannel()
         promoteToForeground(includeLocation = false)
-        registerActivityTransitions()
         startListenerHealthWatchdog()
 
         // Bridge the static notification-text state flow into the OS notification.
@@ -277,8 +280,22 @@ class DriveReplyService : Service() {
             }
         }
 
-        // Listen to speed activation threshold settings from DataStore
+        // Listen to activity recognition and speed activation threshold settings from DataStore
         val app = application as DriveReplyApplication
+        app.preferencesManager.activityRecognitionEnabled
+            .onEach { enabled ->
+                isActivityRecognitionEnabled = enabled
+                DebugEventLogger.log(TAG, "Activity recognition trigger enabled=$enabled")
+                if (enabled) {
+                    registerActivityTransitions()
+                } else {
+                    unregisterActivityTransitions()
+                    cancelActivityExitDebounce()
+                    setDrivingState(false, DrivingStateSource.ACTIVITY_RECOGNITION)
+                }
+            }
+            .launchIn(serviceScope)
+
         app.preferencesManager.speedActivationThreshold
             .onEach { threshold ->
                 DebugEventLogger.log(TAG, "Speed activation threshold updated to $threshold km/h")
@@ -368,6 +385,7 @@ class DriveReplyService : Service() {
     }
 
     private fun registerActivityTransitions() {
+        if (transitionsRegistered) return
         val transitions = listOf(
             ActivityTransition.Builder()
                 .setActivityType(DetectedActivity.IN_VEHICLE)
@@ -392,12 +410,14 @@ class DriveReplyService : Service() {
         try {
             ActivityRecognition.getClient(this)
                 .requestActivityTransitionUpdates(request, transitionPendingIntent!!)
+            transitionsRegistered = true
         } catch (_: SecurityException) {
-            // Activity recognition permission not granted
+            transitionsRegistered = false
         }
     }
 
     private fun unregisterActivityTransitions() {
+        if (!transitionsRegistered) return
         transitionPendingIntent?.let { pendingIntent ->
             try {
                 ActivityRecognition.getClient(this)
@@ -406,6 +426,7 @@ class DriveReplyService : Service() {
                 // Permission may have been revoked
             }
         }
+        transitionsRegistered = false
     }
 
     private fun startLocationSpeedTracking(threshold: Int) {

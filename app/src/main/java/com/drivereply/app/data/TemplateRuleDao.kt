@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -32,9 +33,20 @@ interface TemplateRuleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(rule: TemplateRule)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(rules: List<TemplateRule>)
+
     @Update
     suspend fun update(rule: TemplateRule)
 
     @Delete
     suspend fun delete(rule: TemplateRule)
+
+    @Transaction
+    suspend fun replaceRulesForTemplate(templateId: String, rules: List<TemplateRule>) {
+        deleteByTemplateId(templateId)
+        if (rules.isNotEmpty()) {
+            insertAll(rules.map { it.copy(templateId = templateId) })
+        }
+    }
 }

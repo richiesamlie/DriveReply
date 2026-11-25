@@ -8,7 +8,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -22,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.drivereply.app.data.TemplateRule
 import java.util.Locale
 
 private val DAY_OPTIONS = listOf(
@@ -34,7 +38,7 @@ private val DAY_OPTIONS = listOf(
     7 to "Sun"
 )
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditTemplateScreen(
     templateId: String?,
@@ -43,51 +47,31 @@ fun EditTemplateScreen(
     viewModel: EditTemplateViewModel = viewModel()
 ) {
     val template by viewModel.templateState.collectAsStateWithLifecycle()
-    val rule by viewModel.ruleState.collectAsStateWithLifecycle()
+    val rules by viewModel.rulesState.collectAsStateWithLifecycle()
+    val initialRules by viewModel.initialRules.collectAsStateWithLifecycle()
     val isSaved by viewModel.isSaved.collectAsStateWithLifecycle()
 
     var initializedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var name by rememberSaveable { mutableStateOf("") }
     var body by rememberSaveable { mutableStateOf("") }
-    var contactFilter by rememberSaveable { mutableStateOf("") }
-    var selectedDaysCsv by rememberSaveable { mutableStateOf("") }
-    var timeWindowEnabled by rememberSaveable { mutableStateOf(false) }
-    var startTimeText by rememberSaveable { mutableStateOf("09:00") }
-    var endTimeText by rememberSaveable { mutableStateOf("17:00") }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
+    var editingRule by remember { mutableStateOf<TemplateRule?>(null) }
+    var showRuleDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(templateId) {
         viewModel.loadTemplate(templateId)
         if (templateId == null && initializedKey != "__new__") {
             name = ""
             body = ""
-            contactFilter = ""
-            selectedDaysCsv = ""
-            timeWindowEnabled = false
-            startTimeText = "09:00"
-            endTimeText = "17:00"
             initializedKey = "__new__"
         }
     }
 
-    LaunchedEffect(template, rule, templateId) {
+    LaunchedEffect(template, templateId) {
         val loaded = template
         if (templateId != null && loaded != null && loaded.id == templateId && initializedKey != templateId) {
             name = loaded.name
             body = loaded.body
-            contactFilter = rule?.contactName.orEmpty()
-            selectedDaysCsv = rule?.daysOfWeek.orEmpty()
-            val ruleStart = rule?.startTime
-            val ruleEnd = rule?.endTime
-            if (ruleStart != null && ruleEnd != null) {
-                timeWindowEnabled = true
-                startTimeText = formatMsToTime(ruleStart)
-                endTimeText = formatMsToTime(ruleEnd)
-            } else {
-                timeWindowEnabled = false
-                startTimeText = "09:00"
-                endTimeText = "17:00"
-            }
             initializedKey = templateId
         }
     }
@@ -99,36 +83,14 @@ fun EditTemplateScreen(
         }
     }
 
-    val selectedDays = remember(selectedDaysCsv) {
-        selectedDaysCsv.split(",")
-            .mapNotNull { it.trim().toIntOrNull() }
-            .filter { it in 1..7 }
-            .toSortedSet()
-    }
-
-    val parsedStartMs = remember(timeWindowEnabled, startTimeText) {
-        if (timeWindowEnabled) parseTimeToMs(startTimeText) else null
-    }
-    val parsedEndMs = remember(timeWindowEnabled, endTimeText) {
-        if (timeWindowEnabled) parseTimeToMs(endTimeText) else null
-    }
-    val isTimeWindowValid = !timeWindowEnabled || (parsedStartMs != null && parsedEndMs != null)
-    val canSave = name.isNotBlank() && body.isNotBlank() && isTimeWindowValid
+    val canSave = name.isNotBlank() && body.isNotBlank()
 
     val originalName = template?.name ?: ""
     val originalBody = template?.body ?: ""
-    val originalContact = rule?.contactName.orEmpty()
-    val originalDays = rule?.daysOfWeek.orEmpty()
-    val originalTimeEnabled = rule?.startTime != null && rule?.endTime != null
-    val originalStartText = rule?.startTime?.let(::formatMsToTime) ?: "09:00"
-    val originalEndText = rule?.endTime?.let(::formatMsToTime) ?: "17:00"
     val hasUnsavedChanges = if (templateId == null) {
-        name.isNotBlank() || body.isNotBlank() || contactFilter.isNotBlank() ||
-            selectedDaysCsv.isNotBlank() || timeWindowEnabled
+        name.isNotBlank() || body.isNotBlank() || rules.isNotEmpty()
     } else {
-        name != originalName || body != originalBody || contactFilter != originalContact ||
-            selectedDaysCsv != originalDays || timeWindowEnabled != originalTimeEnabled ||
-            (timeWindowEnabled && (startTimeText != originalStartText || endTimeText != originalEndText))
+        name != originalName || body != originalBody || rules != initialRules
     }
 
     fun handleBack() {
@@ -144,11 +106,7 @@ fun EditTemplateScreen(
         viewModel.saveTemplate(
             name = name,
             body = body,
-            existingId = templateId,
-            contactName = contactFilter,
-            daysOfWeek = selectedDays.joinToString(","),
-            startTime = parsedStartMs,
-            endTime = parsedEndMs
+            existingId = templateId
         )
     }
 
@@ -232,97 +190,59 @@ fun EditTemplateScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Schedule & Contact Rules (Optional)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    OutlinedTextField(
-                        value = contactFilter,
-                        onValueChange = { if (it.length <= 120) contactFilter = it },
-                        label = { Text("Specific Contact (optional)") },
-                        placeholder = { Text("Leave blank to match all contacts") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Text(
-                        text = "Active Days (leave unselected for every day)",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        DAY_OPTIONS.forEach { (dayNum, dayLabel) ->
-                            val isDaySelected = dayNum in selectedDays
-                            FilterChip(
-                                selected = isDaySelected,
-                                onClick = {
-                                    val updated = selectedDays.toMutableSet()
-                                    if (isDaySelected) updated.remove(dayNum) else updated.add(dayNum)
-                                    selectedDaysCsv = updated.sorted().joinToString(",")
-                                },
-                                label = { Text(dayLabel) }
-                            )
-                        }
-                    }
-
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Active Time Window", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Restrict this rule to a time range (24-hour HH:MM)",
+                                text = "Routing & Schedule Rules",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Optional: pick this template for specific contacts or time windows.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        Switch(
-                            checked = timeWindowEnabled,
-                            onCheckedChange = { timeWindowEnabled = it }
-                        )
+                        OutlinedButton(
+                            onClick = {
+                                editingRule = null
+                                showRuleDialog = true
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Rule")
+                        }
                     }
 
-                    if (timeWindowEnabled) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = startTimeText,
-                                onValueChange = { if (it.length <= 5) startTimeText = it },
-                                label = { Text("Start (HH:MM)") },
-                                placeholder = { Text("09:00") },
-                                isError = parsedStartMs == null,
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = endTimeText,
-                                onValueChange = { if (it.length <= 5) endTimeText = it },
-                                label = { Text("End (HH:MM)") },
-                                placeholder = { Text("17:00") },
-                                isError = parsedEndMs == null,
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (!isTimeWindowValid) {
-                            Text(
-                                text = "Enter valid 24-hour times in HH:MM format (00:00 to 23:59).",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                    if (rules.isEmpty()) {
+                        Text(
+                            text = "No rules configured. This template applies when chosen as the active default.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            rules.forEach { rule ->
+                                RuleItemRow(
+                                    rule = rule,
+                                    onEdit = {
+                                        editingRule = rule
+                                        showRuleDialog = true
+                                    },
+                                    onDelete = { viewModel.deleteRuleDraft(rule.id) }
+                                )
+                            }
                         }
                     }
                 }
@@ -351,6 +271,24 @@ fun EditTemplateScreen(
         }
     }
 
+    if (showRuleDialog) {
+        TemplateRuleEditorDialog(
+            initialRule = editingRule,
+            onDismiss = { showRuleDialog = false },
+            onApply = { contactName, selectedDays, startMs, endMs ->
+                viewModel.saveRuleDraft(
+                    ruleId = editingRule?.id,
+                    existingId = templateId,
+                    contactName = contactName,
+                    selectedDays = selectedDays,
+                    startTimeMs = startMs,
+                    endTimeMs = endMs
+                )
+                showRuleDialog = false
+            }
+        )
+    }
+
     if (showDiscardDialog) {
         AlertDialog(
             onDismissRequest = { showDiscardDialog = false },
@@ -375,20 +313,221 @@ fun EditTemplateScreen(
     }
 }
 
+@Composable
+private fun RuleItemRow(
+    rule: TemplateRule,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val contactLabel = rule.contactName?.takeIf { it.isNotBlank() } ?: "All contacts"
+    val daysLabel = formatRuleDays(rule.daysOfWeek)
+    val timeLabel = if (rule.startTime != null && rule.endTime != null) {
+        "${formatMsToTime(rule.startTime)} - ${formatMsToTime(rule.endTime)}"
+    } else {
+        "All day"
+    }
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = contactLabel,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "$daysLabel • $timeLabel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row {
+                IconButton(onClick = onEdit) {
+                    Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Rule")
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete Rule",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun TemplateRuleEditorDialog(
+    initialRule: TemplateRule?,
+    onDismiss: () -> Unit,
+    onApply: (contactName: String?, selectedDays: Set<Int>, startMs: Long?, endMs: Long?) -> Unit
+) {
+    var contactFilter by remember(initialRule) { mutableStateOf(initialRule?.contactName.orEmpty()) }
+    var selectedDays by remember(initialRule) {
+        mutableStateOf(
+            initialRule?.daysOfWeek
+                ?.split(",")
+                ?.mapNotNull { it.trim().toIntOrNull() }
+                ?.filter { it in 1..7 }
+                ?.toSet()
+                ?: emptySet()
+        )
+    }
+    var timeWindowEnabled by remember(initialRule) {
+        mutableStateOf(initialRule?.startTime != null && initialRule.endTime != null)
+    }
+    var startMs by remember(initialRule) { mutableLongStateOf(initialRule?.startTime ?: 9 * 3_600_000L) }
+    var endMs by remember(initialRule) { mutableLongStateOf(initialRule?.endTime ?: 17 * 3_600_000L) }
+    var pickingStart by remember { mutableStateOf<Boolean?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initialRule == null) "Add Rule" else "Edit Rule", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = contactFilter,
+                    onValueChange = { if (it.length <= 120) contactFilter = it },
+                    label = { Text("Specific Contact (Optional)") },
+                    placeholder = { Text("Leave blank for all contacts") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text(
+                    text = "Active Days (leave unselected for every day)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    DAY_OPTIONS.forEach { (dayNum, dayLabel) ->
+                        val isDaySelected = dayNum in selectedDays
+                        FilterChip(
+                            selected = isDaySelected,
+                            onClick = {
+                                selectedDays = if (isDaySelected) selectedDays - dayNum else selectedDays + dayNum
+                            },
+                            label = { Text(dayLabel) }
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Active Time Window", fontWeight = FontWeight.SemiBold)
+                    Switch(checked = timeWindowEnabled, onCheckedChange = { timeWindowEnabled = it })
+                }
+
+                if (timeWindowEnabled) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { pickingStart = true },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("From ${formatMsToTime(startMs)}")
+                        }
+                        OutlinedButton(
+                            onClick = { pickingStart = false },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("To ${formatMsToTime(endMs)}")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onApply(
+                        contactFilter.trim().takeIf { it.isNotEmpty() },
+                        selectedDays,
+                        if (timeWindowEnabled) startMs else null,
+                        if (timeWindowEnabled) endMs else null
+                    )
+                }
+            ) {
+                Text("Apply")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+
+    pickingStart?.let { isStart ->
+        val currentMs = if (isStart) startMs else endMs
+        val totalMinutes = (currentMs / 60_000L).toInt().coerceIn(0, 23 * 60 + 59)
+        val pickerState = rememberTimePickerState(
+            initialHour = totalMinutes / 60,
+            initialMinute = totalMinutes % 60,
+            is24Hour = true
+        )
+        AlertDialog(
+            onDismissRequest = { pickingStart = null },
+            title = { Text(if (isStart) "Start Time" else "End Time") },
+            text = { TimePicker(state = pickerState) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val ms = ((pickerState.hour * 60L) + pickerState.minute) * 60_000L
+                        if (isStart) startMs = ms else endMs = ms
+                        pickingStart = null
+                    }
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pickingStart = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+private fun formatRuleDays(daysValue: String?): String {
+    if (daysValue.isNullOrBlank()) return "Every day"
+    val dayMap = DAY_OPTIONS.toMap()
+    val labels = daysValue.split(",")
+        .mapNotNull { it.trim().toIntOrNull() }
+        .mapNotNull { dayMap[it] }
+    return if (labels.isEmpty()) "Every day" else labels.joinToString(", ")
+}
+
 private fun formatMsToTime(msFromMidnight: Long): String {
     val totalMinutes = (msFromMidnight / 60_000L).toInt().coerceIn(0, 23 * 60 + 59)
     val hour = totalMinutes / 60
     val minute = totalMinutes % 60
     return String.format(Locale.US, "%02d:%02d", hour, minute)
-}
-
-private fun parseTimeToMs(value: String): Long? {
-    val parts = value.trim().split(":")
-    if (parts.size != 2) return null
-    val hour = parts[0].toIntOrNull() ?: return null
-    val minute = parts[1].toIntOrNull() ?: return null
-    if (hour !in 0..23 || minute !in 0..59) return null
-    return ((hour * 60L) + minute) * 60_000L
 }
 
 @Composable
