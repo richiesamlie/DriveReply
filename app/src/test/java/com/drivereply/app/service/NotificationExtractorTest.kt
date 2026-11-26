@@ -1,9 +1,13 @@
 package com.drivereply.app.service
 
 import com.drivereply.app.service.DriveReplyService.DrivingStateSource
+import com.drivereply.app.service.WhatsAppNotificationListener.NotificationMessageSnapshot
+import com.drivereply.app.service.WhatsAppNotificationListener.PreDrivingSkipReason
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -137,5 +141,107 @@ class NotificationExtractorTest {
         // Rollback on send failure unmarks both session and cooldown
         DriveReplyService.unmarkConversationReplied(key)
         assertFalse(DriveReplyService.hasRepliedToConversation(key, afterCooldown))
+    }
+
+    @Test
+    fun preDrivingFilter_skipsRepostedBaselineWithIdenticalSignatureOrOlderTimestamp() {
+        val listener = WhatsAppNotificationListener()
+        val drivingStartedAt = 100_000L
+        val sigOld = listener.computeContentSignature("msg|1|90000|Alice|Hey earlier")
+        val baseline = NotificationMessageSnapshot(
+            messageTimestampMs = 90_000L,
+            contentSignature = sigOld,
+            postTimeMs = 90_050L
+        )
+
+        // App re-posts unread chat while driving (even if postTimeMs or messageTimestampMs changes)
+        val repostSameContent = NotificationMessageSnapshot(
+            messageTimestampMs = 105_000L,
+            contentSignature = sigOld,
+            postTimeMs = 105_010L
+        )
+        assertEquals(
+            PreDrivingSkipReason.UNCHANGED_PRE_DRIVING_NOTIFICATION,
+            listener.shouldSkipAsPreDrivingMessage(drivingStartedAt, repostSameContent, baseline)
+        )
+
+        // App re-posts with same/older message timestamp and reformatted text
+        val repostSameTimestamp = NotificationMessageSnapshot(
+            messageTimestampMs = 90_000L,
+            contentSignature = listener.computeContentSignature("msg|2|90000|Alice|Summary"),
+            postTimeMs = 105_010L
+        )
+        assertEquals(
+            PreDrivingSkipReason.UNCHANGED_PRE_DRIVING_NOTIFICATION,
+            listener.shouldSkipAsPreDrivingMessage(drivingStartedAt, repostSameTimestamp, baseline)
+        )
+    }
+
+    @Test
+    fun preDrivingFilter_skipsPredatingMessageWithoutBaselineAndAllowsNewMessages() {
+        val listener = WhatsAppNotificationListener()
+        val drivingStartedAt = 100_000L
+        val sigOld = listener.computeContentSignature("msg|1|80000|Bob|Before drive")
+
+        // No baseline, but message timestamp is well before drivingStartedAtMs - tolerance
+        val oldNoBaseline = NotificationMessageSnapshot(
+            messageTimestampMs = drivingStartedAt - WhatsAppNotificationListener.CLOCK_SKEW_TOLERANCE_MS - 1_000L,
+            contentSignature = sigOld,
+            postTimeMs = 110_000L
+        )
+        assertEquals(
+            PreDrivingSkipReason.MESSAGE_PREDATES_DRIVING_SESSION,
+            listener.shouldSkipAsPreDrivingMessage(drivingStartedAt, oldNoBaseline, baseline = null)
+        )
+
+        // No messageTimestampMs and postTimeMs predates session start beyond tolerance
+        val oldPostTimeFallback = NotificationMessageSnapshot(
+            messageTimestampMs = null,
+            contentSignature = null,
+            postTimeMs = drivingStartedAt - WhatsAppNotificationListener.CLOCK_SKEW_TOLERANCE_MS - 1L
+        )
+        assertEquals(
+            PreDrivingSkipReason.MESSAGE_PREDATES_DRIVING_SESSION,
+            listener.shouldSkipAsPreDrivingMessage(drivingStartedAt, oldPostTimeFallback, baseline = null)
+        )
+
+        // Genuinely new message in a pre-existing unread conversation is allowed
+        val baseline = NotificationMessageSnapshot(
+            messageTimestampMs = 80_000L,
+            contentSignature = sigOld,
+            postTimeMs = 80_010L
+        )
+        val newInSameChat = NotificationMessageSnapshot(
+            messageTimestampMs = 102_000L,
+            contentSignature = listener.computeContentSignature("msg|2|102000|Bob|Are you on the way?"),
+            postTimeMs = 102_050L
+        )
+        assertNull(
+            listener.shouldSkipAsPreDrivingMessage(drivingStartedAt, newInSameChat, baseline)
+        )
+
+        // Brand-new message arriving within clock-skew tolerance is allowed
+        val withinTolerance = NotificationMessageSnapshot(
+            messageTimestampMs = drivingStartedAt - 2_000L,
+            contentSignature = listener.computeContentSignature("msg|1|98000|Cara|Call me"),
+            postTimeMs = 100_100L
+        )
+        assertNull(
+            listener.shouldSkipAsPreDrivingMessage(drivingStartedAt, withinTolerance, baseline = null)
+        )
+    }
+
+    @Test
+    fun computeContentSignature_isDeterministicAndSensitiveToMessageChanges() {
+        val listener = WhatsAppNotificationListener()
+        val a1 = listener.computeContentSignature("msg|1|1000|Alice|Hi")
+        val a2 = listener.computeContentSignature("msg|1|1000|Alice|Hi")
+        val diffCount = listener.computeContentSignature("msg|2|1000|Alice|Hi")
+        val diffTs = listener.computeContentSignature("msg|1|2000|Alice|Hi")
+
+        assertEquals(64, a1.length)
+        assertEquals(a1, a2)
+        assertNotEquals(a1, diffCount)
+        assertNotEquals(a1, diffTs)
     }
 }

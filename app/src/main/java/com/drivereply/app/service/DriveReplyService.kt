@@ -75,6 +75,10 @@ class DriveReplyService : Service() {
         private var _lastStartRequestedAtMs: Long = 0L
         val lastStartRequestedAtMs: Long get() = _lastStartRequestedAtMs
 
+        @Volatile
+        private var _drivingStartedAtMs: Long = 0L
+        val drivingStartedAtMs: Long get() = _drivingStartedAtMs
+
         /**
          * Notification body shown on the persistent foreground-service
          * notification. Receivers and the service itself can update this
@@ -137,7 +141,8 @@ class DriveReplyService : Service() {
         @Synchronized
         fun setDrivingState(
             driving: Boolean,
-            source: DrivingStateSource = DrivingStateSource.AUTOMATIC
+            source: DrivingStateSource = DrivingStateSource.AUTOMATIC,
+            nowMs: Long = System.currentTimeMillis()
         ) {
             if (source != DrivingStateSource.MANUAL_SIMULATION && _manualSimulationOverride.value && !driving) {
                 _activeSources.remove(source)
@@ -180,6 +185,11 @@ class DriveReplyService : Service() {
             if (!wasDriving && nextDriving) {
                 clearRepliedContacts()
             }
+            if ((!wasDriving && nextDriving) || (source == DrivingStateSource.MANUAL_SIMULATION && driving)) {
+                _drivingStartedAtMs = nowMs
+            } else if (!nextDriving) {
+                _drivingStartedAtMs = 0L
+            }
 
             DebugEventLogger.log(
                 TAG,
@@ -220,6 +230,7 @@ class DriveReplyService : Service() {
             _activeSources.clear()
             _manualSimulationOverride.value = false
             _isDriving.value = false
+            _drivingStartedAtMs = 0L
             _repliedContacts.clear()
             _lastReplyTimestampByConversation.clear()
         }
@@ -245,6 +256,7 @@ class DriveReplyService : Service() {
             }
             _activeSources.clear()
             _isDriving.value = false
+            _drivingStartedAtMs = 0L
             _manualSimulationOverride.value = false
             DebugEventLogger.log(TAG, "Foreground service stop requested")
         }
@@ -322,6 +334,7 @@ class DriveReplyService : Service() {
         serviceScope.cancel()
         _activeSources.clear()
         _isDriving.value = false
+        _drivingStartedAtMs = 0L
         _manualSimulationOverride.value = false
         DebugEventLogger.log(TAG, "Service destroyed")
         super.onDestroy()
