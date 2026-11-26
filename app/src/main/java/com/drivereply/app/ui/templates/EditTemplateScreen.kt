@@ -55,8 +55,11 @@ fun EditTemplateScreen(
     var name by rememberSaveable { mutableStateOf("") }
     var body by rememberSaveable { mutableStateOf("") }
     var showDiscardDialog by rememberSaveable { mutableStateOf(false) }
-    var editingRule by remember { mutableStateOf<TemplateRule?>(null) }
-    var showRuleDialog by remember { mutableStateOf(false) }
+    var editingRuleId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showRuleDialog by rememberSaveable { mutableStateOf(false) }
+    val editingRule = remember(editingRuleId, rules) {
+        editingRuleId?.let { id -> rules.firstOrNull { it.id == id } }
+    }
 
     LaunchedEffect(templateId) {
         viewModel.loadTemplate(templateId)
@@ -140,6 +143,7 @@ fun EditTemplateScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
                 .padding(horizontal = 20.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -210,7 +214,7 @@ fun EditTemplateScreen(
                         }
                         OutlinedButton(
                             onClick = {
-                                editingRule = null
+                                editingRuleId = null
                                 showRuleDialog = true
                             },
                             shape = RoundedCornerShape(12.dp)
@@ -237,7 +241,7 @@ fun EditTemplateScreen(
                                 RuleItemRow(
                                     rule = rule,
                                     onEdit = {
-                                        editingRule = rule
+                                        editingRuleId = rule.id
                                         showRuleDialog = true
                                     },
                                     onDelete = { viewModel.deleteRuleDraft(rule.id) }
@@ -374,23 +378,36 @@ private fun TemplateRuleEditorDialog(
     onDismiss: () -> Unit,
     onApply: (contactName: String?, selectedDays: Set<Int>, startMs: Long?, endMs: Long?) -> Unit
 ) {
-    var contactFilter by remember(initialRule) { mutableStateOf(initialRule?.contactName.orEmpty()) }
-    var selectedDays by remember(initialRule) {
+    var contactFilter by rememberSaveable(initialRule?.id) {
+        mutableStateOf(initialRule?.contactName.orEmpty())
+    }
+    var selectedDaysList by rememberSaveable(initialRule?.id) {
         mutableStateOf(
             initialRule?.daysOfWeek
                 ?.split(",")
                 ?.mapNotNull { it.trim().toIntOrNull() }
                 ?.filter { it in 1..7 }
-                ?.toSet()
-                ?: emptySet()
+                ?.distinct()
+                ?: emptyList()
         )
     }
-    var timeWindowEnabled by remember(initialRule) {
+    val selectedDays = selectedDaysList.toSet()
+    var timeWindowEnabled by rememberSaveable(initialRule?.id) {
         mutableStateOf(initialRule?.startTime != null && initialRule.endTime != null)
     }
-    var startMs by remember(initialRule) { mutableLongStateOf(initialRule?.startTime ?: 9 * 3_600_000L) }
-    var endMs by remember(initialRule) { mutableLongStateOf(initialRule?.endTime ?: 17 * 3_600_000L) }
-    var pickingStart by remember { mutableStateOf<Boolean?>(null) }
+    var startMs by rememberSaveable(initialRule?.id) {
+        mutableLongStateOf(initialRule?.startTime ?: 9 * 3_600_000L)
+    }
+    var endMs by rememberSaveable(initialRule?.id) {
+        mutableLongStateOf(initialRule?.endTime ?: 17 * 3_600_000L)
+    }
+    var pickingStart by rememberSaveable(initialRule?.id) { mutableStateOf<Boolean?>(null) }
+
+    val hasContactConstraint = contactFilter.trim().isNotEmpty()
+    val hasDaySubset = selectedDays.isNotEmpty() && selectedDays.size < 7
+    val hasValidTimeWindow = timeWindowEnabled && startMs != endMs
+    val timeWindowInvalid = timeWindowEnabled && startMs == endMs
+    val canApply = (hasContactConstraint || hasDaySubset || hasValidTimeWindow) && !timeWindowInvalid
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -424,7 +441,8 @@ private fun TemplateRuleEditorDialog(
                         FilterChip(
                             selected = isDaySelected,
                             onClick = {
-                                selectedDays = if (isDaySelected) selectedDays - dayNum else selectedDays + dayNum
+                                val next = if (isDaySelected) selectedDays - dayNum else selectedDays + dayNum
+                                selectedDaysList = next.sorted()
                             },
                             label = { Text(dayLabel) }
                         )
@@ -459,10 +477,25 @@ private fun TemplateRuleEditorDialog(
                         }
                     }
                 }
+
+                if (timeWindowInvalid) {
+                    Text(
+                        text = "Start and end times cannot be identical.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else if (!canApply) {
+                    Text(
+                        text = "Specify a contact, select specific days (1–6), or set a time window.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
+                enabled = canApply,
                 onClick = {
                     onApply(
                         contactFilter.trim().takeIf { it.isNotEmpty() },
@@ -493,7 +526,11 @@ private fun TemplateRuleEditorDialog(
         AlertDialog(
             onDismissRequest = { pickingStart = null },
             title = { Text(if (isStart) "Start Time" else "End Time") },
-            text = { TimePicker(state = pickerState) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    TimePicker(state = pickerState)
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = {

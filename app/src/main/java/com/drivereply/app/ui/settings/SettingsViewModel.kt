@@ -17,10 +17,12 @@ import com.drivereply.app.util.GitHubReleaseChecker
 import com.drivereply.app.util.PermissionHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -84,10 +86,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             installedTag = computeInstalledGitHubStyleTag()
         )
     )
-    private val _setupState = MutableStateFlow(SetupState())
+    private val _setupSnapshot = MutableStateFlow(SetupState())
     private val _pairedBluetoothDevices = MutableStateFlow<List<Pair<String, String>>>(emptyList())
     val updateCheckState: StateFlow<UpdateCheckUiState> = _updateCheckState.asStateFlow()
-    val setupState: StateFlow<SetupState> = _setupState.asStateFlow()
+    val setupState: StateFlow<SetupState> = combine(
+        _setupSnapshot,
+        WhatsAppNotificationListener.isListenerConnected
+    ) { snapshot, connected ->
+        snapshot.copy(isNotificationListenerConnected = connected)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = SetupState()
+    )
     val pairedBluetoothDevices: StateFlow<List<Pair<String, String>>> = _pairedBluetoothDevices.asStateFlow()
 
     val isServiceEnabled: StateFlow<Boolean> = preferencesManager.isServiceEnabled
@@ -154,6 +165,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         )
 
     val isDriving: StateFlow<Boolean> = DriveReplyService.isDriving
+    val isManualSimulationActive: StateFlow<Boolean> = DriveReplyService.isManualSimulationActive
 
     fun setReplyInGroupChats(enabled: Boolean) {
         viewModelScope.launch {
@@ -179,13 +191,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun toggleBluetoothDevice(address: String) {
         viewModelScope.launch {
-            val current = bluetoothDevices.value.toMutableSet()
-            if (current.contains(address)) {
-                current.remove(address)
-            } else {
-                current.add(address)
-            }
-            preferencesManager.setBluetoothDevices(current)
+            preferencesManager.toggleBluetoothDevice(address)
         }
     }
 
@@ -234,7 +240,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 val bonded = getPairedBluetoothDevices()
                 setup to bonded
             }
-            _setupState.value = nextSetup
+            _setupSnapshot.value = nextSetup
             _pairedBluetoothDevices.value = paired
         }
     }
@@ -304,8 +310,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun startDownloadAndInstall() {
         val url = _updateCheckState.value.downloadUrl ?: return
         val tag = _updateCheckState.value.latestTag ?: "latest"
-        downloadJob?.cancel()
+        val previousJob = downloadJob
         downloadJob = viewModelScope.launch {
+            if (previousJob != null) {
+                withContext(Dispatchers.IO) {
+                    apkInstaller.cancel(targetTag = tag)
+                }
+                previousJob.cancelAndJoin()
+            }
             _updateCheckState.value = _updateCheckState.value.copy(
                 isDownloading = true,
                 isVerifying = false,
@@ -383,9 +395,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun cancelDownload() {
-        apkInstaller.cancel()
-        downloadJob?.cancel()
+        val tag = _updateCheckState.value.latestTag ?: "latest"
+        val jobToCancel = downloadJob
         downloadJob = null
+        viewModelScope.launch(Dispatchers.IO) {
+            apkInstaller.cancel(targetTag = tag)
+        }
+        jobToCancel?.cancel()
         _updateCheckState.value = _updateCheckState.value.copy(
             isDownloading = false,
             isVerifying = false,
@@ -393,13 +409,18 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
-    suspend fun buildDiagnosticsSnapshot(): String {
+    override fun onCleared() {
+        val tag = _updateCheckState.value.latestTag ?: "latest"
+        apkInstaller.cancel(targetTag = tag)
+    }
+
+    suspend fun buildDiagnosticsSnapshot(): String = withContext(Dispatchers.IO) {
         val generatedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
         val installedApps = SupportedMessagingPackages.supportedApps.joinToString(separator = ",") { supported ->
             "${supported.label}:${isPackageInstalled(supported.packageName)}"
         }
 
-        return buildString {
+        buildString {
             appendLine("[DriveReply Diagnostics]")
             appendLine("generatedAt=$generatedAt")
             appendLine("installedTag=${_updateCheckState.value.installedTag}")

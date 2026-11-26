@@ -136,4 +136,62 @@ class TemplateRuleTest {
         )
         assertEquals(listOf("specific-id", "general-id"), ordered.map { it.templateId })
     }
+
+    @Test
+    fun rule_overnightWindowWithSpecificDay_appliesToPostMidnightOfPreviousDayOnly() {
+        // Friday (5) 22:00 - 06:00
+        val fridayNight = TemplateRule(
+            templateId = "temp-friday-night",
+            contactName = null,
+            daysOfWeek = "5",
+            startTime = 22L * 3600_000L,
+            endTime = 6L * 3600_000L
+        )
+
+        // Friday 23:00 -> active (evening start day)
+        assertTrue(fridayNight.matches("Alice", dayOfWeek = 5, currentMsSinceMidnight = 23L * 3600_000L))
+        // Saturday 02:00 -> active (continuation after midnight from Friday)
+        assertTrue(fridayNight.matches("Alice", dayOfWeek = 6, currentMsSinceMidnight = 2L * 3600_000L))
+        // Friday 02:00 -> NOT active (would be Thursday night)
+        org.junit.Assert.assertFalse(
+            fridayNight.matches("Alice", dayOfWeek = 5, currentMsSinceMidnight = 2L * 3600_000L)
+        )
+        // Sunday 02:00 -> NOT active
+        org.junit.Assert.assertFalse(
+            fridayNight.matches("Alice", dayOfWeek = 7, currentMsSinceMidnight = 2L * 3600_000L)
+        )
+    }
+
+    @Test
+    fun rule_matchingRules_ordersBySpecificityDeterministically() {
+        val generalScheduled = TemplateRule(
+            id = "r1",
+            templateId = "general-sched",
+            contactName = null,
+            daysOfWeek = "1",
+            startTime = 8L * 3600_000L,
+            endTime = 18L * 3600_000L
+        )
+        val contactOnly = TemplateRule(
+            id = "r2",
+            templateId = "contact-only",
+            contactName = "Alice"
+        )
+        val contactAndDays = TemplateRule(
+            id = "r3",
+            templateId = "contact-days",
+            contactName = "Alice",
+            daysOfWeek = "1"
+        )
+        val ordered = TemplateRule.matchingRules(
+            rules = listOf(generalScheduled, contactOnly, contactAndDays),
+            contactName = "alice",
+            dayOfWeek = 1,
+            currentMsSinceMidnight = 10L * 3600_000L
+        )
+        assertEquals(
+            listOf("contact-days", "contact-only", "general-sched"),
+            ordered.map { it.templateId }
+        )
+    }
 }

@@ -2,6 +2,7 @@ package com.drivereply.app.util
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
@@ -27,18 +28,12 @@ object PermissionHelper {
 
     fun hasNotificationListenerPermission(context: Context): Boolean {
         return try {
-            if (NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)) {
-                return true
-            }
             val componentName = ComponentName(context, WhatsAppNotificationListener::class.java)
-            val enabledListeners = Settings.Secure.getString(
-                context.contentResolver,
-                "enabled_notification_listeners"
-            ) ?: return false
-            enabledListeners
-                .split(':')
-                .mapNotNull { ComponentName.unflattenFromString(it.trim()) }
-                .any { it == componentName }
+            val notificationManager = context.getSystemService(NotificationManager::class.java)
+            if (notificationManager != null) {
+                return notificationManager.isNotificationListenerAccessGranted(componentName)
+            }
+            NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
         } catch (_: Exception) {
             false
         }

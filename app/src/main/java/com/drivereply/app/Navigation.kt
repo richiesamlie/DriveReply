@@ -1,6 +1,8 @@
 package com.drivereply.app
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -24,9 +26,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.drivereply.app.ui.activity.ActivityScreen
 import com.drivereply.app.ui.main.MainScreen
@@ -43,13 +47,13 @@ enum class Tab {
 
 @Composable
 fun MainNavigation(
-    openUpdates: Boolean = false,
+    openUpdatesToken: Int = 0,
     onOpenUpdatesConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val app = remember(context) { context.applicationContext as DriveReplyApplication }
     var hasCompletedOnboarding by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    var openSettingsToUpdates by rememberSaveable { mutableStateOf(openUpdates) }
+    var openSettingsToUpdates by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(app) {
         if (hasCompletedOnboarding == null) {
@@ -73,11 +77,13 @@ fun MainNavigation(
     key(rootKey) {
         val backStack = rememberNavBackStack(rootKey)
 
-        LaunchedEffect(openUpdates, onboardingState) {
-            if (openUpdates) {
-                openSettingsToUpdates = true
-                if (onboardingState && backStack.lastOrNull() != Settings) {
-                    backStack.add(Settings)
+        LaunchedEffect(openUpdatesToken, onboardingState) {
+            if (openUpdatesToken > 0) {
+                if (onboardingState) {
+                    openSettingsToUpdates = true
+                    if (backStack.lastOrNull() != Settings) {
+                        backStack.add(Settings)
+                    }
                 }
                 onOpenUpdatesConsumed()
             }
@@ -85,6 +91,10 @@ fun MainNavigation(
 
         NavDisplay(
             backStack = backStack,
+            entryDecorators = listOf(
+                rememberSaveableStateHolderNavEntryDecorator(),
+                rememberViewModelStoreNavEntryDecorator()
+            ),
             onBack = {
                 if (backStack.lastOrNull() == Settings) {
                     openSettingsToUpdates = false
@@ -96,7 +106,11 @@ fun MainNavigation(
             entryProvider = entryProvider {
                 entry<Main> {
                     MainShell(
-                        onNavigate = { key -> backStack.add(key) },
+                        onNavigate = { key ->
+                            if (backStack.lastOrNull() != key) {
+                                backStack.add(key)
+                            }
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -109,6 +123,7 @@ fun MainNavigation(
                 entry<Settings> {
                     SettingsScreen(
                         initialPane = if (openSettingsToUpdates) SettingsPane.UPDATES_ABOUT else SettingsPane.HOME,
+                        onInitialPaneConsumed = { openSettingsToUpdates = false },
                         onBack = {
                             openSettingsToUpdates = false
                             if (backStack.size > 1) {
@@ -153,6 +168,7 @@ fun MainShell(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0),
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
@@ -177,7 +193,11 @@ fun MainShell(
         },
         modifier = modifier
     ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues)) {
+        Box(
+            modifier = Modifier
+                .padding(paddingValues)
+                .consumeWindowInsets(paddingValues)
+        ) {
             when (currentTab) {
                 Tab.Home -> {
                     MainScreen(

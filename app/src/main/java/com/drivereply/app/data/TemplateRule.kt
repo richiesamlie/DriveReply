@@ -1,12 +1,21 @@
 package com.drivereply.app.data
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.util.UUID
 
 @Entity(
     tableName = "template_rules",
+    foreignKeys = [
+        ForeignKey(
+            entity = MessageTemplate::class,
+            parentColumns = ["id"],
+            childColumns = ["templateId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
     indices = [
         Index(value = ["templateId"]),
         Index(value = ["contactName"])
@@ -30,19 +39,30 @@ data class TemplateRule(
             return false
         }
 
+        val start = startTime
+        val end = endTime
+        val hasTimeWindow = start != null && end != null
+        val isOvernight = hasTimeWindow && start > end
+
+        val effectiveDayOfWeek = if (isOvernight && currentMsSinceMidnight <= end) {
+            if (dayOfWeek == 1) 7 else dayOfWeek - 1
+        } else {
+            dayOfWeek
+        }
+
         val daysMatch = if (!daysOfWeek.isNullOrBlank()) {
             val daysList = daysOfWeek.split(",").mapNotNull { it.trim().toIntOrNull() }
-            dayOfWeek in daysList
+            effectiveDayOfWeek in daysList
         } else {
             true
         }
         if (!daysMatch) return false
 
-        val timeMatch = if (startTime != null && endTime != null) {
-            if (startTime <= endTime) {
-                currentMsSinceMidnight in startTime..endTime
+        val timeMatch = if (hasTimeWindow) {
+            if (!isOvernight) {
+                currentMsSinceMidnight in start..end
             } else {
-                currentMsSinceMidnight >= startTime || currentMsSinceMidnight <= endTime
+                currentMsSinceMidnight >= start || currentMsSinceMidnight <= end
             }
         } else {
             true
@@ -52,16 +72,26 @@ data class TemplateRule(
     }
 
     companion object {
+        private fun specificityScore(rule: TemplateRule): Int {
+            var score = 0
+            if (!rule.contactName.isNullOrBlank()) score += 4
+            if (!rule.daysOfWeek.isNullOrBlank()) score += 2
+            if (rule.startTime != null && rule.endTime != null) score += 1
+            return score
+        }
+
         fun matchingRules(
             rules: List<TemplateRule>,
             contactName: String,
             dayOfWeek: Int,
             currentMsSinceMidnight: Long
         ): List<TemplateRule> {
-            val matching = rules.filter { it.matches(contactName, dayOfWeek, currentMsSinceMidnight) }
-            val specific = matching.filter { !it.contactName.isNullOrBlank() }
-            val general = matching.filter { it.contactName.isNullOrBlank() }
-            return specific + general
+            return rules
+                .filter { it.matches(contactName, dayOfWeek, currentMsSinceMidnight) }
+                .sortedWith(
+                    compareByDescending<TemplateRule> { specificityScore(it) }
+                        .thenBy { it.id }
+                )
         }
 
         fun resolveBestRule(

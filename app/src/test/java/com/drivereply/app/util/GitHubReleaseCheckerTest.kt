@@ -151,5 +151,36 @@ class GitHubReleaseCheckerTest {
                 downloadUrl = "https://attacker.example.com/DriveReply-v2.0.5-release.apk"
             )
         )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "https://raw.githubusercontent.com/attacker/repo/main/app-release.apk"
+            )
+        )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "https://github.com/otheruser/DriveReply/releases/download/v2.0.5/app-release.apk"
+            )
+        )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "https://user@github.com/richiesamlie/DriveReply/releases/download/v2.0.5/app-release.apk"
+            )
+        )
+        assertFalse(
+            GitHubReleaseChecker.isSignedReleaseApkAsset(
+                name = "DriveReply-v2.0.5-release.apk",
+                downloadUrl = "https://github.com:8443/richiesamlie/DriveReply/releases/download/v2.0.5/app-release.apk"
+            )
+        )
+    }
+
+    @Test
+    fun compare_stableBeatsPreReleaseWithSameNumericParts() {
+        assertTrue(GitHubReleaseChecker.compareVersionTags("v2.0.50", "v2.0.50-rc1") > 0)
+        assertTrue(GitHubReleaseChecker.compareVersionTags("v2.0.50-rc1", "v2.0.50") < 0)
+        assertEquals(0, GitHubReleaseChecker.compareVersionTags("v2.0.50-beta", "v2.0.50-beta"))
     }
 }

@@ -132,7 +132,7 @@ class DebugEventLoggerTest {
         // exactly N*M, bounded by MAX_ENTRIES. This exercises the
         // @Synchronized guards.
         val threads = 8
-        val perThread = 50
+        val perThread = 80
         val runners = (0 until threads).map { tid ->
             Thread {
                 repeat(perThread) { i ->

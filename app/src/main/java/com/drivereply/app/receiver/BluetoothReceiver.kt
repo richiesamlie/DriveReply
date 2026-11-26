@@ -9,6 +9,7 @@ import com.drivereply.app.DriveReplyApplication
 import com.drivereply.app.service.DriveReplyService
 import com.drivereply.app.util.DebugEventLogger
 import com.drivereply.app.util.PermissionHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -71,28 +72,31 @@ class BluetoothReceiver : BroadcastReceiver() {
                                 DebugEventLogger.log(TAG, "Ignoring BT connect because monitoring service is disabled")
                                 return@launch
                             }
-                            // Start service and set driving state to true
-                            DriveReplyService.start(context)
-                            DriveReplyService.setDrivingState(
-                                true,
-                                DriveReplyService.DrivingStateSource.BLUETOOTH
+                            val started = DriveReplyService.start(context)
+                            if (!started) {
+                                DebugEventLogger.w(
+                                    TAG,
+                                    "Could not start foreground service on BT connect device=${DebugEventLogger.redact(deviceLabel)}"
+                                )
+                                return@launch
+                            }
+                            DriveReplyService.onBluetoothDeviceConnected(deviceAddress)
+                            DebugEventLogger.log(
+                                TAG,
+                                "Matched selected BT device connected device=${DebugEventLogger.redact(deviceLabel)}"
                             )
-                            DebugEventLogger.log(TAG, "Matched selected BT device connected, driving mode enabled")
 
-                            // Update persistent notification via the service's
-                            // own state flow — no startService() from a
-                            // background context (Android 12+ restriction).
                             DriveReplyService.setNotificationText(
-                                "Driving detected via Bluetooth connection: $deviceLabel"
+                                "Driving detected via Bluetooth connection: $deviceLabel",
+                                logMessage = "Driving detected via Bluetooth connection: ${DebugEventLogger.redact(deviceLabel)}"
                             )
                         }
                         BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                            // End Bluetooth driving trigger
-                            DriveReplyService.setDrivingState(
-                                false,
-                                DriveReplyService.DrivingStateSource.BLUETOOTH
+                            DriveReplyService.onBluetoothDeviceDisconnected(deviceAddress)
+                            DebugEventLogger.log(
+                                TAG,
+                                "Matched selected BT device disconnected device=${DebugEventLogger.redact(deviceLabel)}"
                             )
-                            DebugEventLogger.log(TAG, "Matched selected BT device disconnected")
                             if (!DriveReplyService.isDriving.value) {
                                 DriveReplyService.setNotificationText(
                                     "Service active — waiting for driving detection"
@@ -101,6 +105,10 @@ class BluetoothReceiver : BroadcastReceiver() {
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                DebugEventLogger.w(TAG, "Failed to handle Bluetooth broadcast", e)
             } finally {
                 pendingResult.finish()
             }

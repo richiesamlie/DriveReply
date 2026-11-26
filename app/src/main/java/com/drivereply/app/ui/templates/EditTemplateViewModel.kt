@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.UUID
 
 class EditTemplateViewModel(application: Application) : AndroidViewModel(application) {
@@ -67,7 +68,10 @@ class EditTemplateViewModel(application: Application) : AndroidViewModel(applica
             .sorted()
             .takeIf { it.isNotEmpty() && it.size < 7 }
             ?.joinToString(",")
-        val validWindow = startTimeMs != null && endTimeMs != null
+        val validWindow = startTimeMs != null && endTimeMs != null && startTimeMs != endTimeMs
+        if (cleanContact == null && cleanDays == null && !validWindow) {
+            return
+        }
         val targetTemplateId = existingId ?: ""
 
         val draft = TemplateRule(
@@ -80,6 +84,15 @@ class EditTemplateViewModel(application: Application) : AndroidViewModel(applica
         )
 
         val current = _rulesState.value
+        val isDuplicate = current.any { existing ->
+            existing.id != draft.id &&
+                existing.contactName?.trim()?.lowercase(Locale.ROOT) == draft.contactName?.lowercase(Locale.ROOT) &&
+                existing.daysOfWeek == draft.daysOfWeek &&
+                existing.startTime == draft.startTime &&
+                existing.endTime == draft.endTime
+        }
+        if (isDuplicate) return
+
         _rulesState.value = if (ruleId != null && current.any { it.id == ruleId }) {
             current.map { if (it.id == ruleId) draft else it }
         } else {
@@ -97,26 +110,30 @@ class EditTemplateViewModel(application: Application) : AndroidViewModel(applica
 
         viewModelScope.launch {
             try {
+                val savedTemplate: MessageTemplate
                 val targetId: String
                 if (existingId != null) {
                     targetId = existingId
-                    val existing = templateDao.getById(existingId)
-                    if (existing != null) {
-                        val updated = existing.copy(name = name.trim(), body = body.trim())
-                        templateDao.update(updated)
-                    }
+                    val existing = templateDao.getById(existingId) ?: return@launch
+                    savedTemplate = existing.copy(name = name.trim(), body = body.trim())
+                    templateDao.update(savedTemplate)
                 } else {
                     targetId = UUID.randomUUID().toString()
-                    val newTemplate = MessageTemplate(
+                    savedTemplate = MessageTemplate(
                         id = targetId,
                         name = name.trim(),
                         body = body.trim(),
                         isActive = false
                     )
-                    templateDao.insert(newTemplate)
+                    templateDao.insert(savedTemplate)
                 }
 
-                templateRuleDao.replaceRulesForTemplate(targetId, _rulesState.value)
+                val savedRules = _rulesState.value.map { it.copy(templateId = targetId) }
+                templateRuleDao.replaceRulesForTemplate(targetId, savedRules)
+                _rulesState.value = savedRules
+                _initialRules.value = savedRules
+                _templateState.value = savedTemplate
+                loadedTemplateKey = targetId
                 _isSaved.value = true
             } finally {
                 _isSaving.value = false

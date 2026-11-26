@@ -11,9 +11,8 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="database" path="drivereply.db" />
-        <exclude domain="database" path="drivereply.db-shm" />
-        <exclude domain="database" path="drivereply.db-wal" />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
         <exclude domain="file" path="datastore/" />
     </cloud-backup>
     <device-transfer>

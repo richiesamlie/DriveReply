@@ -97,4 +97,25 @@ class DrivingStateControllerTest {
         assertFalse(DriveReplyService.isDriving.value)
         assertEquals(0L, DriveReplyService.drivingStartedAtMs)
     }
+
+    @Test
+    fun bluetoothDevices_stayDrivingUntilAllSelectedDevicesDisconnectAndTracksManualSimulation() {
+        assertFalse(DriveReplyService.isManualSimulationActive.value)
+
+        DriveReplyService.onBluetoothDeviceConnected("AA:BB:CC:11:22:33")
+        DriveReplyService.onBluetoothDeviceConnected("AA:BB:CC:44:55:66")
+        assertTrue(DriveReplyService.isDriving.value)
+        assertFalse(DriveReplyService.isManualSimulationActive.value)
+
+        DriveReplyService.onBluetoothDeviceDisconnected("AA:BB:CC:11:22:33")
+        assertTrue(DriveReplyService.isDriving.value)
+
+        DriveReplyService.onBluetoothDeviceDisconnected("AA:BB:CC:44:55:66")
+        assertFalse(DriveReplyService.isDriving.value)
+
+        DriveReplyService.setDrivingState(true, DrivingStateSource.MANUAL_SIMULATION, nowMs = 70_000L)
+        assertTrue(DriveReplyService.isManualSimulationActive.value)
+        DriveReplyService.setDrivingState(false, DrivingStateSource.MANUAL_SIMULATION, nowMs = 80_000L)
+        assertFalse(DriveReplyService.isManualSimulationActive.value)
+    }
 }

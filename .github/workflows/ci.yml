@@ -43,6 +43,9 @@ jobs:
       - name: Assemble Debug APK
         run: ./gradlew assembleDebug --console=plain
 
+      - name: Compile AndroidTest Sources
+        run: ./gradlew compileDebugAndroidTestKotlin --console=plain
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7
         with:

@@ -16,7 +16,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,27 +53,25 @@ fun AnalyticsPanel(
     modifier: Modifier = Modifier,
     viewModel: AnalyticsViewModel = viewModel()
 ) {
-    val logs by viewModel.logs.collectAsStateWithLifecycle()
-    val weeklyData by viewModel.last7DaysReplies.collectAsStateWithLifecycle()
-    val appDist by viewModel.appDistribution.collectAsStateWithLifecycle()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     AnalyticsContent(
-        logs = logs,
-        weeklyData = weeklyData,
-        appDist = appDist,
+        totalReplies = uiState.totalReplies,
+        uniqueContacts = uiState.uniqueContacts,
+        weeklyData = uiState.weeklyData,
+        appDist = uiState.appDistribution,
         modifier = modifier
     )
 }
 
 @Composable
 fun AnalyticsContent(
-    logs: List<ReplyLogEntry>,
+    totalReplies: Int,
+    uniqueContacts: Int,
     weeklyData: List<Pair<String, Int>>,
     appDist: Map<String, Int>,
     modifier: Modifier = Modifier
 ) {
-    val totalReplies = logs.size
-    val uniqueContacts = remember(logs) { logs.asSequence().map { it.contactName }.distinct().count() }
 
     LazyColumn(
         modifier = modifier
@@ -244,7 +242,10 @@ fun SplineChart(
     data: List<Pair<String, Int>>,
     modifier: Modifier = Modifier
 ) {
-    val maxVal = remember(data) { (data.maxOfOrNull { it.second } ?: 0).coerceAtLeast(4) }
+    val maxVal = remember(data) {
+        val raw = (data.maxOfOrNull { it.second } ?: 0).coerceAtLeast(4)
+        if (raw % 2 != 0) raw + 1 else raw
+    }
     val primaryColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -252,131 +253,128 @@ fun SplineChart(
     val path = remember { Path() }
     val fillPath = remember { Path() }
 
-    Column(modifier = modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(180.dp)
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val width = size.width
-                val height = size.height
-                val paddingLeft = 36.dp.toPx()
-                val paddingRight = 12.dp.toPx()
-                val paddingTop = 14.dp.toPx()
-                val paddingBottom = 20.dp.toPx()
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(200.dp)
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val width = size.width
+            val height = size.height
+            val labelStyle = TextStyle(color = labelColor, fontSize = 10.sp)
+            val maxTickMeasured = textMeasurer.measure(
+                text = maxVal.toString(),
+                style = labelStyle
+            )
+            val paddingLeft = maxOf(32.dp.toPx(), maxTickMeasured.size.width + 10.dp.toPx())
+            val paddingRight = 14.dp.toPx()
+            val paddingTop = 14.dp.toPx()
+            val paddingBottom = 26.dp.toPx()
 
-                val chartWidth = (width - paddingLeft - paddingRight).coerceAtLeast(1f)
-                val chartHeight = (height - paddingTop - paddingBottom).coerceAtLeast(1f)
+            val chartWidth = (width - paddingLeft - paddingRight).coerceAtLeast(1f)
+            val chartHeight = (height - paddingTop - paddingBottom).coerceAtLeast(1f)
 
-                // Draw Gridlines & Y-Axis Labels
-                val gridLines = 2
-                for (i in 0..gridLines) {
-                    val ratio = i.toFloat() / gridLines
-                    val y = paddingTop + ratio * chartHeight
-                    drawLine(
-                        color = gridColor.copy(alpha = 0.4f),
-                        start = Offset(paddingLeft, y),
-                        end = Offset(width - paddingRight, y),
-                        strokeWidth = 1.dp.toPx()
+            // Draw Gridlines & Y-Axis Labels
+            val gridLines = 2
+            for (i in 0..gridLines) {
+                val ratio = i.toFloat() / gridLines
+                val y = paddingTop + ratio * chartHeight
+                drawLine(
+                    color = gridColor.copy(alpha = 0.4f),
+                    start = Offset(paddingLeft, y),
+                    end = Offset(width - paddingRight, y),
+                    strokeWidth = 1.dp.toPx()
+                )
+                val tickValue = ((1f - ratio) * maxVal).toInt()
+                val measured = textMeasurer.measure(
+                    text = tickValue.toString(),
+                    style = labelStyle
+                )
+                drawText(
+                    textLayoutResult = measured,
+                    topLeft = Offset(
+                        x = (paddingLeft - measured.size.width - 6.dp.toPx()).coerceAtLeast(0f),
+                        y = (y - measured.size.height / 2f).coerceIn(0f, height - measured.size.height)
                     )
-                    val tickValue = ((1f - ratio) * maxVal).toInt()
-                    val measured = textMeasurer.measure(
-                        text = tickValue.toString(),
-                        style = TextStyle(color = labelColor, fontSize = 10.sp)
+                )
+            }
+
+            // Prepare Spline coordinates
+            val stepDivisor = (data.size - 1).coerceAtLeast(1).toFloat()
+            val points = data.mapIndexed { idx, pair ->
+                val x = paddingLeft + (idx.toFloat() / stepDivisor) * chartWidth
+                val y = paddingTop + chartHeight - (pair.second.toFloat() / maxVal) * chartHeight
+                Offset(x, y)
+            }
+
+            // Draw Spline Line and Gradient Area
+            if (points.isNotEmpty()) {
+                path.reset()
+                fillPath.reset()
+
+                path.moveTo(points.first().x, points.first().y)
+                fillPath.moveTo(points.first().x, paddingTop + chartHeight)
+                fillPath.lineTo(points.first().x, points.first().y)
+
+                for (i in 1 until points.size) {
+                    val current = points[i]
+                    val previous = points[i - 1]
+                    val control1 = Offset((current.x + previous.x) / 2f, previous.y)
+                    val control2 = Offset((current.x + previous.x) / 2f, current.y)
+
+                    path.cubicTo(control1.x, control1.y, control2.x, control2.y, current.x, current.y)
+                    fillPath.cubicTo(control1.x, control1.y, control2.x, control2.y, current.x, current.y)
+                }
+
+                fillPath.lineTo(points.last().x, paddingTop + chartHeight)
+                fillPath.close()
+
+                // Draw Gradient Fill
+                drawPath(
+                    path = fillPath,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            primaryColor.copy(alpha = 0.4f),
+                            primaryColor.copy(alpha = 0.0f)
+                        ),
+                        startY = paddingTop,
+                        endY = paddingTop + chartHeight
+                    )
+                )
+
+                // Draw Spline Stroke
+                drawPath(
+                    path = path,
+                    color = primaryColor,
+                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                )
+
+                // Draw Data Dots & Centered X-Axis Labels
+                val xLabelY = paddingTop + chartHeight + 6.dp.toPx()
+                points.forEachIndexed { idx, pt ->
+                    drawCircle(
+                        color = primaryColor,
+                        radius = 4.dp.toPx(),
+                        center = pt
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 2.dp.toPx(),
+                        center = pt
+                    )
+                    val measuredX = textMeasurer.measure(
+                        text = data[idx].first,
+                        style = labelStyle
                     )
                     drawText(
-                        textLayoutResult = measured,
+                        textLayoutResult = measuredX,
                         topLeft = Offset(
-                            x = (paddingLeft - measured.size.width - 6.dp.toPx()).coerceAtLeast(0f),
-                            y = (y - measured.size.height / 2f).coerceIn(0f, height - measured.size.height)
+                            x = (pt.x - measuredX.size.width / 2f)
+                                .coerceIn(0f, (width - measuredX.size.width).coerceAtLeast(0f)),
+                            y = xLabelY.coerceIn(0f, (height - measuredX.size.height).coerceAtLeast(0f))
                         )
                     )
                 }
-
-                // Prepare Spline coordinates
-                val stepDivisor = (data.size - 1).coerceAtLeast(1).toFloat()
-                val points = data.mapIndexed { idx, pair ->
-                    val x = paddingLeft + (idx.toFloat() / stepDivisor) * chartWidth
-                    val y = paddingTop + chartHeight - (pair.second.toFloat() / maxVal) * chartHeight
-                    Offset(x, y)
-                }
-
-                // Draw Spline Line and Gradient Area
-                if (points.isNotEmpty()) {
-                    path.reset()
-                    fillPath.reset()
-
-                    path.moveTo(points.first().x, points.first().y)
-                    fillPath.moveTo(points.first().x, paddingTop + chartHeight)
-                    fillPath.lineTo(points.first().x, points.first().y)
-
-                    for (i in 1 until points.size) {
-                        val current = points[i]
-                        val previous = points[i - 1]
-                        val control1 = Offset((current.x + previous.x) / 2f, previous.y)
-                        val control2 = Offset((current.x + previous.x) / 2f, current.y)
-
-                        path.cubicTo(control1.x, control1.y, control2.x, control2.y, current.x, current.y)
-                        fillPath.cubicTo(control1.x, control1.y, control2.x, control2.y, current.x, current.y)
-                    }
-
-                    fillPath.lineTo(points.last().x, paddingTop + chartHeight)
-                    fillPath.close()
-
-                    // Draw Gradient Fill
-                    drawPath(
-                        path = fillPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                primaryColor.copy(alpha = 0.4f),
-                                primaryColor.copy(alpha = 0.0f)
-                            ),
-                            startY = paddingTop,
-                            endY = paddingTop + chartHeight
-                        )
-                    )
-
-                    // Draw Spline Stroke
-                    drawPath(
-                        path = path,
-                        color = primaryColor,
-                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
-                    )
-
-                    // Draw Data Dots
-                    points.forEach { pt ->
-                        drawCircle(
-                            color = primaryColor,
-                            radius = 4.dp.toPx(),
-                            center = pt
-                        )
-                        drawCircle(
-                            color = Color.White,
-                            radius = 2.dp.toPx(),
-                            center = pt
-                        )
-                    }
-                }
-            }
-        }
-
-        // Draw X-Axis labels
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 22.dp, end = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            data.forEach { pair ->
-                Text(
-                    text = pair.first,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(36.dp),
-                    textAlign = TextAlign.Center
-                )
             }
         }
     }
@@ -473,7 +471,7 @@ fun DonutChart(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             sliceList.forEach { slice ->
-                val percentage = ((slice.count.toFloat() / totalCount) * 100).toInt()
+                val percentage = if (totalCount > 0) ((slice.count.toFloat() / totalCount) * 100).toInt() else 0
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -488,7 +486,8 @@ fun DonutChart(
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

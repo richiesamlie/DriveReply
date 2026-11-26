@@ -13,7 +13,8 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class OnboardingUiState(
-    val isCompleting: Boolean = false
+    val isCompleting: Boolean = false,
+    val isCompleted: Boolean = false
 )
 
 class OnboardingViewModel(application: Application) : AndroidViewModel(application) {
@@ -28,45 +29,43 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
     fun completeOnboarding(
         templateName: String,
         templateBody: String,
-        detectionMode: String = "ACTIVITY",
-        onComplete: () -> Unit
+        detectionMode: String = "ACTIVITY"
     ) {
-        if (_uiState.value.isCompleting) return
+        if (_uiState.value.isCompleting || _uiState.value.isCompleted) return
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isCompleting = true)
-
-            val existingActive = templateDao.getActiveSuspend()
-            if (existingActive == null) {
-                templateDao.deactivateAll()
-                templateDao.insert(
-                    MessageTemplate(
-                        id = UUID.randomUUID().toString(),
+            try {
+                val existingActive = templateDao.getActiveSuspend()
+                if (existingActive == null) {
+                    templateDao.deactivateAll()
+                    templateDao.insert(
+                        MessageTemplate(
+                            id = UUID.randomUUID().toString(),
+                            name = templateName.trim(),
+                            body = templateBody.trim(),
+                            isActive = true
+                        )
+                    )
+                } else {
+                    val updated = existingActive.copy(
                         name = templateName.trim(),
                         body = templateBody.trim(),
                         isActive = true
                     )
-                )
-            } else {
-                val updated = existingActive.copy(
-                    name = templateName.trim(),
-                    body = templateBody.trim(),
-                    isActive = true
-                )
-                templateDao.update(updated)
-            }
+                    templateDao.update(updated)
+                }
 
-            val enableService = !detectionMode.equals("MANUAL", ignoreCase = true)
-            val enableActivityRecognition = detectionMode.equals("ACTIVITY", ignoreCase = true)
-            preferencesManager.setActivityRecognitionEnabled(enableActivityRecognition)
-            preferencesManager.setServiceEnabled(enableService)
-            if (enableService) {
+                val enableActivityRecognition = detectionMode.equals("ACTIVITY", ignoreCase = true)
+                preferencesManager.setActivityRecognitionEnabled(enableActivityRecognition)
+                preferencesManager.setServiceEnabled(true)
                 DriveReplyService.start(app)
-            }
 
-            preferencesManager.setHasCompletedOnboarding(true)
-            _uiState.value = _uiState.value.copy(isCompleting = false)
-            onComplete()
+                preferencesManager.setHasCompletedOnboarding(true)
+                _uiState.value = _uiState.value.copy(isCompleted = true)
+            } finally {
+                _uiState.value = _uiState.value.copy(isCompleting = false)
+            }
         }
     }
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,8 +50,8 @@ import com.drivereply.app.util.PermissionHelper
 
 private enum class DetectionMode(val label: String, val description: String) {
     ACTIVITY("Activity Recognition", "Auto-detect with motion/activity sensors."),
-    BLUETOOTH("Bluetooth", "Use selected car Bluetooth devices."),
-    MANUAL("Manual", "Manually toggle driving mode from settings.")
+    BLUETOOTH("Bluetooth", "Select paired car Bluetooth devices in Settings -> Automation."),
+    MANUAL("Manual", "Service stays ready; toggle driving mode in Settings -> Debugging.")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -104,6 +105,11 @@ fun OnboardingScreen(
             refreshPermissionStatus()
         }
     }
+    LaunchedEffect(uiState.isCompleted) {
+        if (uiState.isCompleted) {
+            onCompleted()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -120,6 +126,7 @@ fun OnboardingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .imePadding()
                 .padding(horizontal = 20.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -191,14 +198,14 @@ fun OnboardingScreen(
                             Text("Create your auto-reply", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                             OutlinedTextField(
                                 value = templateName,
-                                onValueChange = { templateName = it },
+                                onValueChange = { if (it.length <= 80) templateName = it },
                                 label = { Text("Template Name") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
                                 value = templateBody,
-                                onValueChange = { templateBody = it },
+                                onValueChange = { if (it.length <= 1000) templateBody = it },
                                 label = { Text("Message") },
                                 minLines = 4,
                                 modifier = Modifier.fillMaxWidth()
@@ -265,8 +272,7 @@ fun OnboardingScreen(
                             viewModel.completeOnboarding(
                                 templateName = templateName,
                                 templateBody = templateBody,
-                                detectionMode = detectionMode.name,
-                                onComplete = onCompleted
+                                detectionMode = detectionMode.name
                             )
                         }
                     },

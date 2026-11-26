@@ -10,7 +10,7 @@ import java.util.UUID
 
 @Database(
     entities = [MessageTemplate::class, ReplyLogEntry::class, TemplateRule::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -59,6 +59,41 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "DELETE FROM `template_rules` WHERE `templateId` NOT IN (SELECT `id` FROM `message_templates`)"
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `template_rules_new` (
+                        `id` TEXT NOT NULL,
+                        `templateId` TEXT NOT NULL,
+                        `contactName` TEXT,
+                        `daysOfWeek` TEXT,
+                        `startTime` INTEGER,
+                        `endTime` INTEGER,
+                        PRIMARY KEY(`id`),
+                        FOREIGN KEY(`templateId`) REFERENCES `message_templates`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `template_rules_new` (`id`, `templateId`, `contactName`, `daysOfWeek`, `startTime`, `endTime`)
+                    SELECT `id`, `templateId`, `contactName`, `daysOfWeek`, `startTime`, `endTime` FROM `template_rules`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `template_rules`")
+                db.execSQL("ALTER TABLE `template_rules_new` RENAME TO `template_rules`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_template_rules_templateId` ON `template_rules` (`templateId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_template_rules_contactName` ON `template_rules` (`contactName`)"
+                )
+            }
+        }
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -73,7 +108,7 @@ abstract class AppDatabase : RoomDatabase() {
                 "drivereply.db"
             )
                 .addCallback(PrepopulateCallback())
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
         }
     }

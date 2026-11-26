@@ -24,7 +24,7 @@ interface TemplateRuleDao {
     @Query("SELECT * FROM template_rules WHERE templateId = :templateId")
     suspend fun getByTemplateId(templateId: String): List<TemplateRule>
 
-    @Query("SELECT * FROM template_rules WHERE LOWER(TRIM(contactName)) = LOWER(TRIM(:contactName)) OR contactName IS NULL")
+    @Query("SELECT * FROM template_rules WHERE contactName = TRIM(:contactName) COLLATE NOCASE OR contactName IS NULL OR TRIM(contactName) = ''")
     suspend fun getRulesForContact(contactName: String): List<TemplateRule>
 
     @Query("DELETE FROM template_rules WHERE templateId = :templateId")

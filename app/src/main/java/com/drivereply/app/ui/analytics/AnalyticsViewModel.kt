@@ -13,6 +13,13 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+data class AnalyticsUiState(
+    val totalReplies: Int = 0,
+    val uniqueContacts: Int = 0,
+    val weeklyData: List<Pair<String, Int>> = emptyList(),
+    val appDistribution: Map<String, Int> = emptyMap()
+)
+
 class AnalyticsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as DriveReplyApplication
@@ -25,28 +32,29 @@ class AnalyticsViewModel(application: Application) : AndroidViewModel(applicatio
             initialValue = emptyList()
         )
 
-    val last7DaysReplies: StateFlow<List<Pair<String, Int>>> = logs.map { logList ->
+    val uiState: StateFlow<AnalyticsUiState> = logs.map { logList ->
         val now = LocalDate.now()
         val days = (0..6).map { now.minusDays(it.toLong()) }.reversed()
         val formatter = DateTimeFormatter.ofPattern("E")
-        days.map { date ->
+        val weekly = days.map { date ->
             val startOfDay = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
             val endOfDay = date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
             val count = logList.count { it.timestamp in startOfDay until endOfDay }
             date.format(formatter) to count
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = emptyList()
-    )
-
-    val appDistribution: StateFlow<Map<String, Int>> = logs.map { logList ->
-        logList.groupBy { it.packageName }
+        val distribution = logList.groupBy { it.packageName }
             .mapValues { it.value.size }
+        val uniqueContacts = logList.asSequence().map { it.contactName }.distinct().count()
+
+        AnalyticsUiState(
+            totalReplies = logList.size,
+            uniqueContacts = uniqueContacts,
+            weeklyData = weekly,
+            appDistribution = distribution
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = emptyMap()
+        initialValue = AnalyticsUiState()
     )
 }

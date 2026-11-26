@@ -347,12 +347,13 @@ fun StatusCard(
         shape = RoundedCornerShape(32.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(200.dp),
+            .heightIn(min = 200.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .heightIn(min = 200.dp)
                 .background(backgroundBrush)
                 .padding(24.dp),
             contentAlignment = Alignment.Center
@@ -422,11 +423,12 @@ fun StatCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
         ),
-        modifier = modifier.height(130.dp)
+        modifier = modifier.heightIn(min = 130.dp)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .heightIn(min = 130.dp)
                 .padding(18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
