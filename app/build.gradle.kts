@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 val releaseVersionCode: Int = System.getenv("RELEASE_VERSION_CODE")
     ?.toIntOrNull()
     ?.coerceAtLeast(1)
-    ?: 49
+    ?: 50
 
 // DriveReply 2.0 ships under a new applicationId: `com.drivereply.app`.
 // (The pre-2.0 package `com.example.drivereply` was a Play-blocking

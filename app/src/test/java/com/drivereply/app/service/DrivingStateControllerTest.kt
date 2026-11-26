@@ -2,6 +2,7 @@ package com.drivereply.app.service
 
 import com.drivereply.app.service.DriveReplyService.DrivingStateSource
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -70,5 +71,30 @@ class DrivingStateControllerTest {
                 t0 + DriveReplyService.CONVERSATION_COOLDOWN_MS + 1L
             )
         )
+    }
+
+    @Test
+    fun drivingStartedAtMs_tracksSessionStartAndPreservesInitialAutomaticStart() {
+        assertEquals(0L, DriveReplyService.drivingStartedAtMs)
+
+        DriveReplyService.setDrivingState(true, DrivingStateSource.BLUETOOTH, nowMs = 10_000L)
+        assertEquals(10_000L, DriveReplyService.drivingStartedAtMs)
+
+        // Second automatic source activating concurrently keeps the original session start
+        DriveReplyService.setDrivingState(true, DrivingStateSource.GPS_SPEED, nowMs = 20_000L)
+        assertEquals(10_000L, DriveReplyService.drivingStartedAtMs)
+
+        // Manual simulation explicitly starts/refreshes the session timestamp
+        DriveReplyService.setDrivingState(true, DrivingStateSource.MANUAL_SIMULATION, nowMs = 30_000L)
+        assertEquals(30_000L, DriveReplyService.drivingStartedAtMs)
+
+        DriveReplyService.setDrivingState(false, DrivingStateSource.MANUAL_SIMULATION, nowMs = 40_000L)
+        assertTrue(DriveReplyService.isDriving.value)
+        assertEquals(30_000L, DriveReplyService.drivingStartedAtMs)
+
+        DriveReplyService.setDrivingState(false, DrivingStateSource.BLUETOOTH, nowMs = 50_000L)
+        DriveReplyService.setDrivingState(false, DrivingStateSource.GPS_SPEED, nowMs = 55_000L)
+        assertFalse(DriveReplyService.isDriving.value)
+        assertEquals(0L, DriveReplyService.drivingStartedAtMs)
     }
 }

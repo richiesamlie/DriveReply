@@ -5,6 +5,12 @@ All notable changes to DriveReply will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.50] — 2026-11-26
+
+### Fixed
+- Recorded `drivingStartedAtMs` in `DriveReplyService` on driving session start and added message timestamp plus pre-driving notification snapshot filtering in `WhatsAppNotificationListener` so unread messages from before driving started are not auto-replied when notifications refresh.
+- Added unit tests covering `drivingStartedAtMs` lifecycle transitions and pre-driving vs in-drive notification filtering (`DrivingStateControllerTest`, `NotificationExtractorTest`).
+
 ## [2.0.49] — 2026-11-25
 
 ### Changed

@@ -12,6 +12,8 @@ import com.drivereply.app.data.PreferencesManager
 import com.drivereply.app.data.ReplyLogEntry
 import com.drivereply.app.data.TemplateRule
 import com.drivereply.app.util.DebugEventLogger
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,22 +27,52 @@ import kotlinx.coroutines.launch
 class WhatsAppNotificationListener : NotificationListenerService() {
     companion object {
         private const val TAG = "DriveReplyListener"
+        internal const val CLOCK_SKEW_TOLERANCE_MS = 5_000L
         private val _isListenerConnected = MutableStateFlow(false)
         val isListenerConnected: StateFlow<Boolean> = _isListenerConnected.asStateFlow()
     }
 
+    internal data class NotificationMessageSnapshot(
+        val messageTimestampMs: Long?,
+        val contentSignature: String?,
+        val postTimeMs: Long
+    )
+
+    internal enum class PreDrivingSkipReason {
+        MESSAGE_PREDATES_DRIVING_SESSION,
+        UNCHANGED_PRE_DRIVING_NOTIFICATION
+    }
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var preferencesManager: PreferencesManager
+    private val preDrivingSnapshots = ConcurrentHashMap<String, NotificationMessageSnapshot>()
 
     override fun onCreate() {
         super.onCreate()
         preferencesManager = (application as DriveReplyApplication).preferencesManager
+        serviceScope.launch {
+            var wasDriving = DriveReplyService.isDriving.value
+            DriveReplyService.isDriving.collect { driving ->
+                if (wasDriving && !driving) {
+                    snapshotActiveNotifications(clearFirst = true)
+                }
+                wasDriving = driving
+            }
+        }
         DebugEventLogger.log(TAG, "Notification listener service created")
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         _isListenerConnected.value = true
+        if (!DriveReplyService.isDriving.value) {
+            snapshotActiveNotifications(clearFirst = true)
+        } else {
+            snapshotActiveNotifications(
+                clearFirst = false,
+                onlyBeforeMs = DriveReplyService.drivingStartedAtMs.takeIf { it > 0L }
+            )
+        }
         val startedAt = DriveReplyService.lastStartRequestedAtMs
         if (startedAt > 0L) {
             val latencyMs = System.currentTimeMillis() - startedAt
@@ -70,12 +102,6 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return
         }
 
-        // Only process when driving
-        if (!DriveReplyService.isDriving.value) {
-            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=$packageName, key=${sbn.key}")
-            return
-        }
-
         val extras = sbn.notification.extras
         if (extras == null) {
             DebugEventLogger.log(TAG, "Skip: notification extras missing package=$packageName, key=${sbn.key}")
@@ -83,6 +109,28 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         }
         val contactName = extractContactName(extras) ?: sbn.key
         val dedupeKey = buildDedupeKey(sbn, extras, contactName)
+        val snapshot = extractMessageSnapshot(sbn, extras)
+
+        // Only process when driving; record pre-driving baseline snapshots when idle
+        if (!DriveReplyService.isDriving.value) {
+            preDrivingSnapshots[dedupeKey] = snapshot
+            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=$packageName, key=${sbn.key}")
+            return
+        }
+
+        val skipReason = shouldSkipAsPreDrivingMessage(
+            drivingStartedAtMs = DriveReplyService.drivingStartedAtMs,
+            current = snapshot,
+            baseline = preDrivingSnapshots[dedupeKey]
+        )
+        if (skipReason != null) {
+            DebugEventLogger.log(
+                TAG,
+                "Skip pre-driving notification reason=$skipReason package=$packageName key=${sbn.key}"
+            )
+            return
+        }
+
         DebugEventLogger.log(TAG, "Notif received package=$packageName, key=${sbn.key}")
 
         serviceScope.launch {
@@ -222,6 +270,14 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         if (packageName.contains("whatsapp", ignoreCase = true)) {
             DebugEventLogger.log(TAG, "Notification removed package=$packageName, key=${sbn.key}")
         }
+        if (!DriveReplyService.isDriving.value &&
+            SupportedMessagingPackages.contains(packageName) &&
+            (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0)
+        ) {
+            val extras = sbn.notification.extras ?: return
+            val contactName = extractContactName(extras) ?: sbn.key
+            preDrivingSnapshots.remove(buildDedupeKey(sbn, extras, contactName))
+        }
     }
 
     override fun onListenerDisconnected() {
@@ -234,6 +290,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
     override fun onDestroy() {
         _isListenerConnected.value = false
+        preDrivingSnapshots.clear()
         DebugEventLogger.log(TAG, "Notification listener destroyed")
         serviceScope.cancel()
         super.onDestroy()
@@ -294,32 +351,133 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return true
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            @Suppress("DEPRECATION")
-            val parcelables: Array<Parcelable>? =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
-                } else {
-                    extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-                }
-            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
-            if (messages.isNotEmpty()) {
-                val latestMessage = messages.last()
-                val latestSenderPerson = latestMessage.senderPerson
-                if (latestSenderPerson == null) {
-                    return true
-                }
-                val latestSenderName = latestSenderPerson.name?.toString()?.trim()
-                if (!selfDisplayName.isNullOrEmpty() &&
-                    !latestSenderName.isNullOrEmpty() &&
-                    latestSenderName.equals(selfDisplayName, ignoreCase = true)
-                ) {
-                    return true
-                }
+        val messages = extractMessagingStyleMessages(extras)
+        if (messages.isNotEmpty()) {
+            val latestMessage = messages.last()
+            val latestSenderPerson = latestMessage.senderPerson
+            if (latestSenderPerson == null) {
+                return true
+            }
+            val latestSenderName = latestSenderPerson.name?.toString()?.trim()
+            if (!selfDisplayName.isNullOrEmpty() &&
+                !latestSenderName.isNullOrEmpty() &&
+                latestSenderName.equals(selfDisplayName, ignoreCase = true)
+            ) {
+                return true
             }
         }
 
         return false
+    }
+
+    private fun extractMessagingStyleMessages(extras: Bundle): List<Notification.MessagingStyle.Message> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
+        @Suppress("DEPRECATION")
+        val parcelables: Array<Parcelable>? =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
+            } else {
+                extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+            }
+        return Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
+    }
+
+    internal fun computeContentSignature(raw: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return digest.joinToString(separator = "") { "%02x".format(it) }
+    }
+
+    internal fun extractMessageSnapshot(
+        sbn: StatusBarNotification,
+        extras: Bundle
+    ): NotificationMessageSnapshot {
+        val messages = extractMessagingStyleMessages(extras)
+        val notificationWhen = sbn.notification.`when`.takeIf { it > 0L }
+        if (messages.isNotEmpty()) {
+            val latestMessage = messages.last()
+            val messageTimestampMs = messages.maxOfOrNull { it.timestamp }?.takeIf { it > 0L }
+                ?: notificationWhen
+            val rawSig =
+                "msg|${messages.size}|${latestMessage.timestamp}|${latestMessage.senderPerson?.name ?: ""}|${latestMessage.text ?: ""}"
+            return NotificationMessageSnapshot(
+                messageTimestampMs = messageTimestampMs,
+                contentSignature = computeContentSignature(rawSig),
+                postTimeMs = sbn.postTime
+            )
+        }
+
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
+        val contentSignature = if (text.isNotEmpty() || bigText.isNotEmpty()) {
+            computeContentSignature("txt|$title|$text|$bigText")
+        } else {
+            null
+        }
+        return NotificationMessageSnapshot(
+            messageTimestampMs = notificationWhen,
+            contentSignature = contentSignature,
+            postTimeMs = sbn.postTime
+        )
+    }
+
+    internal fun shouldSkipAsPreDrivingMessage(
+        drivingStartedAtMs: Long,
+        current: NotificationMessageSnapshot,
+        baseline: NotificationMessageSnapshot?
+    ): PreDrivingSkipReason? {
+        if (baseline != null) {
+            if (current.contentSignature != null &&
+                baseline.contentSignature != null &&
+                current.contentSignature == baseline.contentSignature
+            ) {
+                return PreDrivingSkipReason.UNCHANGED_PRE_DRIVING_NOTIFICATION
+            }
+            if (current.messageTimestampMs != null &&
+                baseline.messageTimestampMs != null &&
+                current.messageTimestampMs <= baseline.messageTimestampMs
+            ) {
+                return PreDrivingSkipReason.UNCHANGED_PRE_DRIVING_NOTIFICATION
+            }
+        }
+        if (drivingStartedAtMs > 0L) {
+            val cutoffMs = drivingStartedAtMs - CLOCK_SKEW_TOLERANCE_MS
+            val effectiveTimestampMs = current.messageTimestampMs
+                ?: current.postTimeMs.takeIf { it > 0L }
+            if (effectiveTimestampMs != null && effectiveTimestampMs < cutoffMs) {
+                return PreDrivingSkipReason.MESSAGE_PREDATES_DRIVING_SESSION
+            }
+        }
+        return null
+    }
+
+    private fun snapshotActiveNotifications(
+        clearFirst: Boolean,
+        onlyBeforeMs: Long? = null
+    ) {
+        if (!_isListenerConnected.value) return
+        val notifications = try {
+            activeNotifications
+        } catch (_: Exception) {
+            return
+        } ?: return
+
+        if (clearFirst) {
+            preDrivingSnapshots.clear()
+        }
+        for (sbn in notifications) {
+            if (!SupportedMessagingPackages.contains(sbn.packageName)) continue
+            if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) continue
+            val extras = sbn.notification.extras ?: continue
+            val contactName = extractContactName(extras) ?: sbn.key
+            val dedupeKey = buildDedupeKey(sbn, extras, contactName)
+            val snapshot = extractMessageSnapshot(sbn, extras)
+            if (onlyBeforeMs != null) {
+                val effectiveTs = snapshot.messageTimestampMs ?: snapshot.postTimeMs.takeIf { it > 0L }
+                if (effectiveTs == null || effectiveTs >= onlyBeforeMs) continue
+            }
+            preDrivingSnapshots[dedupeKey] = snapshot
+        }
     }
 
     internal fun findReplyAction(notification: Notification): Notification.Action? {
@@ -363,20 +521,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return directCandidates.first()
         }
 
-        // getMessagesFromBundleArray is API 30+; on API 29 we don't have
-        // access to the per-message sender, so fall through to the
-        // direct-extra path (which already returns a value if any).
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        // getParcelableArray(name, Class) is the API 33+ typed overload;
-        // fall back to the legacy call for API 29..32.
-        @Suppress("DEPRECATION")
-        val parcelables: Array<Parcelable>? =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
-            } else {
-                extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-            }
-        val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
+        val messages = extractMessagingStyleMessages(extras)
         val sender = messages.asReversed().mapNotNull { message ->
             // senderPerson is the modern (API 28+) source; the
             // deprecated CharSequence `sender` is intentionally not
@@ -395,19 +540,8 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
-        // getMessagesFromBundleArray is API 30+; on API 29 we have no
-        // access to the per-message sender and the platformGroupFlag
-        // + title-sender mismatch is still computed below for the
-        // WhatsApp branch.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            @Suppress("DEPRECATION")
-            val parcelables: Array<Parcelable>? =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    extras.getParcelableArray(Notification.EXTRA_MESSAGES, Parcelable::class.java)
-                } else {
-                    extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-                }
-            val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
+        val messages = extractMessagingStyleMessages(extras)
+        if (messages.isNotEmpty()) {
             val latestMessageSender = messages.asReversed().mapNotNull { message ->
                 message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             }.firstOrNull()
