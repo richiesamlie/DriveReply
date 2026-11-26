@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: autonomous-ci-release
+  cancel-in-progress: false
+
 # (SIGNING_KEYSTORE_REQUIRED is computed inside the build job, because the
 # env context in `if:` does not see step-level secrets and we need the
 # value alongside the secret itself. The two relevant inputs are
@@ -94,6 +98,7 @@ jobs:
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Decode Keystore or Fail on Main
+        id: keystore
         env:
           SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
           KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
@@ -105,6 +110,7 @@ jobs:
           if [ -n "$SIGNING_KEYSTORE" ] && [ -n "$KEY_STORE_PASSWORD" ] && [ -n "$ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             printf '%s' "$SIGNING_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release-key.jks"
             chmod 600 "$RUNNER_TEMP/release-key.jks"
+            echo "path=${RUNNER_TEMP}/release-key.jks" >> "$GITHUB_OUTPUT"
             echo "::notice::Decoded signing keystore to RUNNER_TEMP ($(wc -c < "$RUNNER_TEMP/release-key.jks") bytes)"
           elif [ "$SIGNING_KEYSTORE_REQUIRED" = "true" ]; then
             echo "::error::RELEASE builds on main require all 4 signing secrets (SIGNING_KEYSTORE, KEY_STORE_PASSWORD, ALIAS, KEY_PASSWORD). Refusing to ship an unsigned APK." >&2
@@ -113,6 +119,7 @@ jobs:
             echo "::error::Partial signing secrets configured. All 4 secrets (SIGNING_KEYSTORE, KEY_STORE_PASSWORD, ALIAS, KEY_PASSWORD) must be set together." >&2
             exit 1
           else
+            echo "path=" >> "$GITHUB_OUTPUT"
             echo "::warning::Signing secrets are not set. Building unsigned release APK for workflow_dispatch verification; public GitHub Release creation will be skipped."
           fi
 
@@ -121,7 +128,7 @@ jobs:
         env:
           RELEASE_VERSION_CODE: ${{ github.run_number }}
           RELEASE_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
-          RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release-key.jks
+          RELEASE_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
           RELEASE_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -153,12 +160,25 @@ jobs:
           sha256sum DriveReply-*-release.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Verify Signed APK Signature
+        if: steps.prepare.outputs.release_signed == 'true'
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner not found under $ANDROID_HOME/build-tools" >&2
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose --print-certs build-artifacts/DriveReply-*-release.apk
+
       - name: Create GitHub Release
         if: steps.prepare.outputs.release_signed == 'true'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag_name }}
           name: DriveReply Build #${{ github.run_number }}${{ steps.meta.outputs.normalized_suffix }}
+          prerelease: ${{ steps.meta.outputs.normalized_suffix != '' }}
+          make_latest: ${{ steps.meta.outputs.normalized_suffix == '' }}
           body: |
             ## Autonomous CI Build Release
 

@@ -1,5 +1,6 @@
 package com.drivereply.app.service
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -64,7 +65,9 @@ class DriveReplyService : Service() {
         private val _isDriving = MutableStateFlow(false)
         val isDriving: StateFlow<Boolean> = _isDriving.asStateFlow()
         private val _manualSimulationOverride = MutableStateFlow(false)
+        val isManualSimulationActive: StateFlow<Boolean> = _manualSimulationOverride.asStateFlow()
         private val _activeSources: MutableSet<DrivingStateSource> = ConcurrentHashMap.newKeySet()
+        private val _connectedBluetoothDevices: MutableSet<String> = ConcurrentHashMap.newKeySet()
         private val activityExitHandler = Handler(Looper.getMainLooper())
         private var activityExitRunnable: Runnable? = null
 
@@ -90,10 +93,10 @@ class DriveReplyService : Service() {
         )
         val notificationText: StateFlow<String> = _notificationText.asStateFlow()
 
-        fun setNotificationText(text: String) {
+        fun setNotificationText(text: String, logMessage: String = text) {
             if (_notificationText.value != text) {
                 _notificationText.value = text
-                DebugEventLogger.log(TAG, "Notification text set: $text")
+                DebugEventLogger.log(TAG, "Notification text set: $logMessage")
             }
         }
 
@@ -196,6 +199,43 @@ class DriveReplyService : Service() {
                 "Driving state -> $nextDriving (source=$source, activeSources=$_activeSources, manualOverride=${_manualSimulationOverride.value})"
             )
             _isDriving.value = nextDriving
+
+            if (source == DrivingStateSource.MANUAL_SIMULATION) {
+                if (driving) {
+                    setNotificationText("Manual driving simulation active 🚗")
+                } else if (!nextDriving) {
+                    setNotificationText("Service active — waiting for driving detection")
+                }
+            }
+        }
+
+        @Synchronized
+        fun onBluetoothDeviceConnected(address: String) {
+            val normalized = address.trim()
+            if (normalized.isNotEmpty()) {
+                _connectedBluetoothDevices.add(normalized)
+            }
+            setDrivingState(true, DrivingStateSource.BLUETOOTH)
+        }
+
+        @Synchronized
+        fun onBluetoothDeviceDisconnected(address: String) {
+            val normalized = address.trim()
+            if (normalized.isNotEmpty()) {
+                _connectedBluetoothDevices.remove(normalized)
+            }
+            if (_connectedBluetoothDevices.isEmpty()) {
+                setDrivingState(false, DrivingStateSource.BLUETOOTH)
+            }
+        }
+
+        @Synchronized
+        private fun clearAllDrivingState() {
+            _activeSources.clear()
+            _connectedBluetoothDevices.clear()
+            _manualSimulationOverride.value = false
+            _isDriving.value = false
+            _drivingStartedAtMs = 0L
         }
 
         fun onActivityTransitionEnter() {
@@ -206,6 +246,7 @@ class DriveReplyService : Service() {
         }
 
         fun onActivityTransitionExit() {
+            if (DrivingStateSource.ACTIVITY_RECOGNITION !in _activeSources) return
             cancelActivityExitDebounce()
             val runnable = Runnable {
                 setDrivingState(false, DrivingStateSource.ACTIVITY_RECOGNITION)
@@ -227,22 +268,21 @@ class DriveReplyService : Service() {
 
         internal fun resetStateForTest() {
             cancelActivityExitDebounce()
-            _activeSources.clear()
-            _manualSimulationOverride.value = false
-            _isDriving.value = false
-            _drivingStartedAtMs = 0L
+            clearAllDrivingState()
             _repliedContacts.clear()
             _lastReplyTimestampByConversation.clear()
         }
 
-        fun start(context: Context) {
+        fun start(context: Context): Boolean {
             _lastStartRequestedAtMs = System.currentTimeMillis()
             val intent = Intent(context, DriveReplyService::class.java)
-            try {
+            return try {
                 context.startForegroundService(intent)
                 DebugEventLogger.log(TAG, "Foreground service start requested")
+                true
             } catch (e: Exception) {
                 DebugEventLogger.log(TAG, "Foreground service start blocked or failed", e)
+                false
             }
         }
 
@@ -254,10 +294,7 @@ class DriveReplyService : Service() {
             } catch (e: Exception) {
                 DebugEventLogger.log(TAG, "Foreground service stop failed", e)
             }
-            _activeSources.clear()
-            _isDriving.value = false
-            _drivingStartedAtMs = 0L
-            _manualSimulationOverride.value = false
+            clearAllDrivingState()
             DebugEventLogger.log(TAG, "Foreground service stop requested")
         }
     }
@@ -270,6 +307,7 @@ class DriveReplyService : Service() {
     private var locationCallback: LocationCallback? = null
     private val speedHandler = Handler(Looper.getMainLooper())
     private var speedExitRunnable: Runnable? = null
+    private var speedSignalLossRunnable: Runnable? = null
     private var currentThreshold = 0
     private var isLocationTrackingActive = false
     private val listenerHealthHandler = Handler(Looper.getMainLooper())
@@ -330,36 +368,67 @@ class DriveReplyService : Service() {
         cancelActivityExitDebounce()
         stopListenerHealthWatchdog()
         unregisterActivityTransitions()
-        stopLocationSpeedTracking()
+        stopLocationSpeedTracking(demoteForeground = false)
         serviceScope.cancel()
-        _activeSources.clear()
-        _isDriving.value = false
-        _drivingStartedAtMs = 0L
-        _manualSimulationOverride.value = false
+        clearAllDrivingState()
         DebugEventLogger.log(TAG, "Service destroyed")
         super.onDestroy()
     }
 
-    private fun promoteToForeground(includeLocation: Boolean) {
-        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val baseType = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            if (includeLocation && PermissionHelper.hasFineLocationPermission(this)) {
-                baseType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            } else {
-                baseType
-            }
-        } else if (includeLocation && PermissionHelper.hasFineLocationPermission(this)) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+    private fun promoteToForeground(includeLocation: Boolean): Boolean {
+        val canAttachLocation = includeLocation &&
+            PermissionHelper.hasFineLocationPermission(this) &&
+            PermissionHelper.hasBackgroundLocationPermission(this)
+
+        val baseType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
             0
         }
 
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(_notificationText.value),
-            fgsType
-        )
+        val targetType = if (canAttachLocation) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                baseType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+        } else {
+            baseType
+        }
+
+        return try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(_notificationText.value),
+                targetType
+            )
+            canAttachLocation || !includeLocation
+        } catch (e: Exception) {
+            val isStartRestricted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                e is ForegroundServiceStartNotAllowedException
+            if (canAttachLocation && (e is SecurityException || isStartRestricted)) {
+                DebugEventLogger.w(
+                    TAG,
+                    "Location FGS promotion disallowed from current state; falling back to base service",
+                    e
+                )
+                try {
+                    ServiceCompat.startForeground(
+                        this,
+                        NOTIFICATION_ID,
+                        buildNotification(_notificationText.value),
+                        baseType
+                    )
+                } catch (fallbackEx: Exception) {
+                    DebugEventLogger.w(TAG, "Fallback foreground promotion failed", fallbackEx)
+                }
+                false
+            } else {
+                DebugEventLogger.w(TAG, "Foreground promotion failed", e)
+                false
+            }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -423,29 +492,44 @@ class DriveReplyService : Service() {
         try {
             ActivityRecognition.getClient(this)
                 .requestActivityTransitionUpdates(request, transitionPendingIntent!!)
-            transitionsRegistered = true
-        } catch (_: SecurityException) {
+                .addOnSuccessListener {
+                    transitionsRegistered = true
+                }
+                .addOnFailureListener { e ->
+                    transitionsRegistered = false
+                    DebugEventLogger.w(TAG, "Activity transition registration failed", e)
+                }
+        } catch (e: SecurityException) {
             transitionsRegistered = false
+            DebugEventLogger.w(TAG, "Missing permission for activity transition updates", e)
         }
     }
 
     private fun unregisterActivityTransitions() {
-        if (!transitionsRegistered) return
-        transitionPendingIntent?.let { pendingIntent ->
-            try {
-                ActivityRecognition.getClient(this)
-                    .removeActivityTransitionUpdates(pendingIntent)
-            } catch (_: SecurityException) {
-                // Permission may have been revoked
-            }
+        val pendingIntent = transitionPendingIntent ?: PendingIntent.getBroadcast(
+            this,
+            TRANSITION_PENDING_INTENT_REQUEST_CODE,
+            Intent(this, ActivityTransitionReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+        try {
+            ActivityRecognition.getClient(this)
+                .removeActivityTransitionUpdates(pendingIntent)
+        } catch (_: SecurityException) {
+            // Permission may have been revoked
         }
         transitionsRegistered = false
     }
 
     private fun startLocationSpeedTracking(threshold: Int) {
         currentThreshold = threshold
-        if (!PermissionHelper.hasFineLocationPermission(this)) {
-            DebugEventLogger.log(TAG, "Skipping speed tracking: fine location permission not granted")
+        if (!PermissionHelper.hasFineLocationPermission(this) ||
+            !PermissionHelper.hasBackgroundLocationPermission(this)
+        ) {
+            DebugEventLogger.log(
+                TAG,
+                "Skipping speed tracking: fine and background location permissions required"
+            )
             stopLocationSpeedTracking()
             return
         }
@@ -455,7 +539,10 @@ class DriveReplyService : Service() {
         }
 
         stopLocationSpeedTracking()
-        promoteToForeground(includeLocation = true)
+        if (!promoteToForeground(includeLocation = true)) {
+            DebugEventLogger.log(TAG, "Skipping speed tracking: location foreground promotion disallowed")
+            return
+        }
 
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000L) // 10 seconds
             .setMinUpdateIntervalMillis(5000L)
@@ -469,10 +556,13 @@ class DriveReplyService : Service() {
                     if (speedKmH >= currentThreshold) {
                         speedExitRunnable?.let { speedHandler.removeCallbacks(it) }
                         speedExitRunnable = null
+                        scheduleSpeedSignalLossExit()
 
                         setDrivingState(true, DrivingStateSource.GPS_SPEED)
-                        setNotificationText(String.format(Locale.US, "Driving detected via Speed: %.1f km/h 🚗", speedKmH))
+                        setNotificationText("Driving detected via Speed — auto-reply active 🚗")
                     } else {
+                        speedSignalLossRunnable?.let { speedHandler.removeCallbacks(it) }
+                        speedSignalLossRunnable = null
                         if (DrivingStateSource.GPS_SPEED in _activeSources && speedExitRunnable == null) {
                             DebugEventLogger.log(
                                 TAG,
@@ -495,23 +585,44 @@ class DriveReplyService : Service() {
         try {
             fusedLocationClient?.requestLocationUpdates(locationRequest, locationCallback!!, Looper.getMainLooper())
             isLocationTrackingActive = true
-        } catch (_: SecurityException) {
-            // Location permission not granted
+        } catch (e: SecurityException) {
             isLocationTrackingActive = false
+            DebugEventLogger.w(TAG, "Location speed updates denied", e)
+            promoteToForeground(includeLocation = false)
         }
     }
 
-    private fun stopLocationSpeedTracking() {
+    private fun scheduleSpeedSignalLossExit() {
+        speedSignalLossRunnable?.let { speedHandler.removeCallbacks(it) }
+        val runnable = Runnable {
+            if (DrivingStateSource.GPS_SPEED in _activeSources) {
+                DebugEventLogger.log(TAG, "GPS speed signal lost for debounce window, stopping speed trigger")
+                setDrivingState(false, DrivingStateSource.GPS_SPEED)
+                if (!_isDriving.value) {
+                    setNotificationText("Service active — waiting for driving detection")
+                }
+            }
+            speedSignalLossRunnable = null
+        }
+        speedSignalLossRunnable = runnable
+        speedHandler.postDelayed(runnable, EXIT_DEBOUNCE_MS)
+    }
+
+    private fun stopLocationSpeedTracking(demoteForeground: Boolean = true) {
         locationCallback?.let { callback ->
             fusedLocationClient?.removeLocationUpdates(callback)
         }
         locationCallback = null
         speedExitRunnable?.let { speedHandler.removeCallbacks(it) }
         speedExitRunnable = null
+        speedSignalLossRunnable?.let { speedHandler.removeCallbacks(it) }
+        speedSignalLossRunnable = null
         setDrivingState(false, DrivingStateSource.GPS_SPEED)
         if (isLocationTrackingActive) {
             isLocationTrackingActive = false
-            promoteToForeground(includeLocation = false)
+            if (demoteForeground) {
+                promoteToForeground(includeLocation = false)
+            }
         }
     }
 
@@ -519,10 +630,9 @@ class DriveReplyService : Service() {
         stopListenerHealthWatchdog()
         listenerHealthRunnable = object : Runnable {
             override fun run() {
-                val permissionGranted = PermissionHelper.hasNotificationListenerPermission(this@DriveReplyService)
-                val listenerConnected = WhatsAppNotificationListener.isListenerConnected.value
-
-                if (permissionGranted && !listenerConnected) {
+                if (!WhatsAppNotificationListener.isListenerConnected.value &&
+                    PermissionHelper.hasNotificationListenerPermission(this@DriveReplyService)
+                ) {
                     val now = System.currentTimeMillis()
                     if ((now - lastListenerRebindAttemptMs) >= LISTENER_REBIND_COOLDOWN_MS) {
                         lastListenerRebindAttemptMs = now

@@ -18,6 +18,8 @@ object GitHubReleaseChecker {
     private const val LATEST_RELEASE_API =
         "https://api.github.com/repos/richiesamlie/DriveReply/releases/latest"
     private const val LEGACY_STATIC_METADATA_LAST_TAG_PATCH = 19
+    private const val MAX_API_RESPONSE_BYTES = 256 * 1024
+    private const val EXPECTED_GITHUB_REPO_PREFIX = "/richiesamlie/DriveReply/"
     private val ALLOWED_DOWNLOAD_HOSTS = setOf(
         "github.com",
         "objects.githubusercontent.com",
@@ -26,25 +28,54 @@ object GitHubReleaseChecker {
     )
 
     suspend fun checkForUpdates(installedTag: String): Result<UpdateCheckResult> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val connection = (URL(LATEST_RELEASE_API).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "DriveReply/$installedTag")
+                setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
                 connectTimeout = 10_000
                 readTimeout = 10_000
             }
             try {
                 val responseCode = connection.responseCode
+                if (responseCode == 403 || responseCode == 429) {
+                    val remaining = connection.getHeaderField("X-RateLimit-Remaining")
+                    if (responseCode == 429 || remaining == "0") {
+                        throw IllegalStateException("GitHub API rate limit reached. Try again later.")
+                    }
+                    throw IllegalStateException("GitHub API returned HTTP $responseCode")
+                }
                 if (responseCode !in 200..299) {
                     throw IllegalStateException("GitHub API returned HTTP $responseCode")
                 }
 
-                val body = connection.inputStream.bufferedReader().use { it.readText() }
-                parseReleaseJson(body, installedTag)
+                val body = readBoundedText(connection)
+                Result.success(parseReleaseJson(body, installedTag))
             } finally {
                 connection.disconnect()
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
         }
+    }
+
+    private fun readBoundedText(connection: HttpURLConnection): String {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        val out = java.io.ByteArrayOutputStream()
+        connection.inputStream.use { input ->
+            while (true) {
+                val read = input.read(buffer)
+                if (read == -1) break
+                if (out.size() + read > MAX_API_RESPONSE_BYTES) {
+                    throw IllegalStateException("GitHub release metadata response too large")
+                }
+                out.write(buffer, 0, read)
+            }
+        }
+        return out.toString(Charsets.UTF_8.name())
     }
 
     internal fun parseReleaseJson(body: String, installedTag: String): UpdateCheckResult {
@@ -100,10 +131,12 @@ object GitHubReleaseChecker {
             val uri = URI(url.trim())
             val scheme = uri.scheme?.lowercase()
             val host = uri.host?.lowercase()
-            scheme == "https" && host != null && (
-                host in ALLOWED_DOWNLOAD_HOSTS ||
-                    host.endsWith(".githubusercontent.com")
-                )
+            val path = uri.rawPath ?: ""
+            if (scheme != "https" || host == null) return false
+            if (uri.userInfo != null || uri.port != -1) return false
+            if (host !in ALLOWED_DOWNLOAD_HOSTS) return false
+            if (host == "github.com" && !path.startsWith(EXPECTED_GITHUB_REPO_PREFIX)) return false
+            true
         } catch (_: Exception) {
             false
         }
@@ -118,7 +151,14 @@ object GitHubReleaseChecker {
             val r = rightParts.getOrElse(i) { 0 }
             if (l != r) return l.compareTo(r)
         }
-        return 0
+        val leftPre = parsePreReleaseSuffix(left)
+        val rightPre = parsePreReleaseSuffix(right)
+        return when {
+            leftPre == null && rightPre == null -> 0
+            leftPre == null -> 1
+            rightPre == null -> -1
+            else -> leftPre.compareTo(rightPre, ignoreCase = true)
+        }
     }
 
     private fun parseNumericParts(tag: String): List<Int> {
@@ -128,6 +168,14 @@ object GitHubReleaseChecker {
         return versionToken
             .split('.')
             .map { part -> part.toIntOrNull() ?: 0 }
+    }
+
+    private fun parsePreReleaseSuffix(tag: String): String? {
+        val cleaned = tag.trim().removePrefix("v").removePrefix("V")
+        val withoutBuild = cleaned.substringBefore('+')
+        val dashIdx = withoutBuild.indexOf('-')
+        if (dashIdx < 0) return null
+        return withoutBuild.substring(dashIdx + 1).trim().takeIf { it.isNotEmpty() }
     }
 
     internal fun shouldSuppressLegacyFalsePositive(installedTag: String, latestTag: String): Boolean {

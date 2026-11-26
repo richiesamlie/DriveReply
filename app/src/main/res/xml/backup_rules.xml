@@ -21,14 +21,7 @@
       from auto-backup. These contain user-authored content that can be
       sensitive.
     -->
-    <exclude domain="database" path="drivereply.db" />
-    <exclude domain="database" path="drivereply.db-shm" />
-    <exclude domain="database" path="drivereply.db-wal" />
-
-    <!--
-      Exclude DataStore preferences. Includes the user-selected car
-      Bluetooth MAC addresses, service enable toggle, and debug-log
-      preference.
-    -->
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
     <exclude domain="file" path="datastore/" />
 </full-backup-content>

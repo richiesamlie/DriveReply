@@ -23,8 +23,6 @@ Run:
 
 from __future__ import annotations
 
-import math
-import os
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -88,7 +86,7 @@ def draw_background(img: Image.Image) -> None:
     # layer, then alpha-composited. Centered slightly off-center to mirror
     # the vector drawable's gradient.
     grad_center = (dp(40), dp(35))
-    grad_radius = dp(60)
+    grad_radius = dp(120)
     layers = 48
     for i in range(layers, 0, -1):
         t = i / layers
@@ -135,15 +133,16 @@ def draw_wheel(img: Image.Image) -> None:
     r = dp(GEOM["wheel_r"])
     stroke = dp(GEOM["wheel_stroke"])
 
-    # Outer ring: stroked circle, no fill. Use two filled circles (outer
-    # white, inner background-color) so the ring thickness is exact.
+    # Outer ring: centered on radius `r` with total thickness `stroke`.
+    outer_r = r + stroke / 2
+    inner_r = r - stroke / 2
     draw.ellipse(
-        [cx - r, cy - r, cx + r, cy + r],
+        [cx - outer_r, cy - outer_r, cx + outer_r, cy + outer_r],
         fill=WHEEL,
     )
     draw.ellipse(
-        [cx - r + stroke, cy - r + stroke, cx + r - stroke, cy + r - stroke],
-        fill=BG_OUTER,
+        [cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r],
+        fill=BUBBLE,
     )
 
     # 3 spokes (top, bottom-left, bottom-right). Drawn with stroke + round
@@ -161,9 +160,8 @@ def draw_wheel(img: Image.Image) -> None:
             joint="curve",
         )
 
-    # Central hub: filled white circle, large enough to cover the spoke
-    # origins cleanly.
-    hub_r = dp(GEOM["hub_r"]) + stroke / 2
+    # Central hub: matches ic_launcher_foreground.xml geometry.
+    hub_r = dp(GEOM["hub_r"])
     draw.ellipse(
         [cx - hub_r, cy - hub_r, cx + hub_r, cy + hub_r],
         fill=WHEEL,

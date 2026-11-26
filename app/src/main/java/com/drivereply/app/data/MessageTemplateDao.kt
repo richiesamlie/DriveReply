@@ -36,10 +36,19 @@ interface MessageTemplateDao {
     @Query("DELETE FROM template_rules WHERE templateId = :templateId")
     suspend fun deleteRulesByTemplateId(templateId: String)
 
+    @Query("SELECT id FROM message_templates ORDER BY createdAt ASC LIMIT 1")
+    suspend fun getFirstId(): String?
+
     @Transaction
     suspend fun delete(template: MessageTemplate) {
         deleteRulesByTemplateId(template.id)
         deleteTemplateRow(template)
+        if (template.isActive) {
+            val nextActiveId = getFirstId()
+            if (nextActiveId != null) {
+                activateById(nextActiveId)
+            }
+        }
     }
 
     @Query("UPDATE message_templates SET isActive = 0")
@@ -47,6 +56,7 @@ interface MessageTemplateDao {
 
     @Transaction
     suspend fun setActive(id: String) {
+        if (getById(id) == null) return
         deactivateAll()
         activateById(id)
     }

@@ -14,13 +14,18 @@ import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
+import android.os.Looper
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import com.drivereply.app.MainActivity
 import com.drivereply.app.R
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -88,32 +93,22 @@ class ApkUpdateInstaller internal constructor(
         val safeTag = sanitizeTag(targetTag)
         val canonicalUpdatesDir = updatesDir.canonicalFile
         val targetFile = File(canonicalUpdatesDir, "DriveReply-$safeTag.apk")
-        val partFile = File(canonicalUpdatesDir, "DriveReply-$safeTag.apk.part")
+        val partFile = File.createTempFile("DriveReply-$safeTag-", ".apk.part", canonicalUpdatesDir)
         if (targetFile.canonicalFile.parentFile != canonicalUpdatesDir ||
             partFile.canonicalFile.parentFile != canonicalUpdatesDir
         ) {
+            if (partFile.exists()) partFile.delete()
             val err = UpdateError.Unknown("Invalid update target path for tag '$targetTag'")
             notifier.onFailed(channelId, safeTag, err.message)
             emit(UpdateEvent.Failed(err))
             return@flow
         }
 
-        // Best-effort cleanup of any previous in-progress attempt:
-        //   - partial `.apk.part` from an interrupted/cancelled download
-        //   - zero-byte placeholder from a canceled download
-        //   - any older file in updates/ that we did not produce
-        //     ourselves (an interrupted download that crashed the
-        //     process before completion)
-        if (partFile.exists()) partFile.delete()
         if (targetFile.exists() && targetFile.length() == 0L) targetFile.delete()
-        cleanupStaleDownloads(keepCanonical = targetFile.name)
+        cleanupStaleDownloads(keepCanonical = targetFile.name, keepPart = partFile.name)
         notifier.onPreparing(channelId, safeTag)
         emit(UpdateEvent.Preparing(targetFile))
 
-        // Download + verify with bounded exponential backoff. Only
-        // transient errors (IOException, 5xx, 408/429) are retried;
-        // permanent failures (4xx, signature mismatch, wrong
-        // package, version gate) surface immediately.
         val maxAttempts = MAX_DOWNLOAD_ATTEMPTS
         var attempt = 0
         while (true) {
@@ -151,6 +146,7 @@ class ApkUpdateInstaller internal constructor(
                 return@flow
             } catch (e: kotlinx.coroutines.CancellationException) {
                 if (partFile.exists()) partFile.delete()
+                notifier.onFailed(channelId, safeTag, "Cancelled")
                 throw e
             } catch (e: Exception) {
                 if (partFile.exists()) partFile.delete()
@@ -171,10 +167,7 @@ class ApkUpdateInstaller internal constructor(
                 return@flow
             }
             val backoffMs = computeBackoffMs(attempt)
-            notifier.onFailed(
-                channelId, safeTag,
-                "Network error, retrying in ${backoffMs}ms (attempt ${attempt + 1}/$maxAttempts)"
-            )
+            notifier.onPreparing(channelId, safeTag)
             // Cancellable: if the user hits Cancel during the backoff
             // window, kotlinx.coroutines.delay throws
             // CancellationException and the flow unwinds cleanly.
@@ -203,10 +196,10 @@ class ApkUpdateInstaller internal constructor(
             val responseCode = conn.responseCode
             if (responseCode !in 200..299) {
                 partFile.delete()
-                // 4xx (except 408/429) are permanent. 5xx and 408/429 are
-                // transient: server issues or "back off and retry".
-                if (responseCode in 400..499 &&
-                    responseCode != 408 && responseCode != 429
+                // Redirects are handled by HttpUrlConnectionTransport; a 3xx here means an
+                // unsafe redirect target or non-HTTPS downgrade was returned directly.
+                if (responseCode in 300..399 ||
+                    (responseCode in 400..499 && responseCode != 408 && responseCode != 429)
                 ) {
                     return DownloadOnceOutcome.PermanentFailure(
                         UpdateError.HttpStatus(responseCode)
@@ -228,7 +221,9 @@ class ApkUpdateInstaller internal constructor(
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var written = 0L
                     var lastEmittedPercent = -1
+                    var lastIndeterminateAtMs = 0L
                     while (true) {
+                        currentCoroutineContext().ensureActive()
                         val read = input.read(buffer)
                         if (read == -1) break
                         written += read
@@ -246,6 +241,12 @@ class ApkUpdateInstaller internal constructor(
                                 lastEmittedPercent = percent
                                 notifier.onProgress(channelId, targetTag, percent)
                                 publish(UpdateEvent.Progress(percent, written, totalBytes))
+                            }
+                        } else {
+                            val now = System.currentTimeMillis()
+                            if (now - lastIndeterminateAtMs >= 500L) {
+                                lastIndeterminateAtMs = now
+                                publish(UpdateEvent.Progress(0, written, -1L))
                             }
                         }
                     }
@@ -338,6 +339,20 @@ class ApkUpdateInstaller internal constructor(
         if (!apk.exists() || apk.length() == 0L) {
             return Result.failure(IllegalStateException("APK file missing or empty"))
         }
+        if (!context.packageManager.canRequestPackageInstalls()) {
+            val permissionIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                data = "package:${context.packageName}".toUri()
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(permissionIntent)
+            } catch (_: ActivityNotFoundException) {
+                // Fall back to returning the instructional error message below.
+            }
+            return Result.failure(
+                SecurityException("Allow \"Install unknown apps\" for DriveReply, then tap Install again.")
+            )
+        }
         val authority = "${context.packageName}.updater.fileprovider"
         val uri: Uri = try {
             FileProvider.getUriForFile(context, authority, apk)
@@ -346,10 +361,8 @@ class ApkUpdateInstaller internal constructor(
                 "FileProvider misconfigured: ${e.message}", e
             ))
         }
-        // ACTION_INSTALL_PACKAGE is marked deprecated since API 28 but
-        // remains the only public contract for sideloading an APK
-        // (PackageInstaller requires the system INSTALL_PACKAGES
-        // permission, which third-party apps cannot hold).
+        // ACTION_INSTALL_PACKAGE is marked deprecated since API 29, while
+        // PackageInstaller.Session requires incremental streaming + callback receivers.
         @Suppress("DEPRECATION")
         val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
@@ -367,22 +380,30 @@ class ApkUpdateInstaller internal constructor(
         }
     }
 
-    fun cancel() {
-        currentConnection?.disconnect()
+    fun cancel(channelId: String = DEFAULT_CHANNEL_ID, targetTag: String = "latest") {
+        val conn = currentConnection
         currentConnection = null
+        if (conn != null) {
+            val onMainThread = try {
+                Looper.getMainLooper() != null && Looper.myLooper() == Looper.getMainLooper()
+            } catch (_: Exception) {
+                false
+            }
+            if (onMainThread) {
+                Thread { runCatching { conn.disconnect() } }.start()
+            } else {
+                runCatching { conn.disconnect() }
+            }
+        }
+        notifier.onFailed(channelId, sanitizeTag(targetTag), "Cancelled")
     }
 
-    /**
-     * Delete any non-canonical files left in [updatesDir]. Called at
-     * the start of a new download to make sure an interrupted previous
-     * attempt (process killed mid-download, app uninstalled mid-update)
-     * does not accumulate as cache garbage.
-     */
-    fun cleanupStaleDownloads(keepCanonical: String? = null) {
+    fun cleanupStaleDownloads(keepCanonical: String? = null, keepPart: String? = null) {
         if (!updatesDir.isDirectory) return
         val files = updatesDir.listFiles() ?: return
         for (f in files) {
             if (keepCanonical != null && f.name == keepCanonical) continue
+            if (keepPart != null && f.name == keepPart) continue
             try {
                 f.delete() // best effort
             } catch (_: SecurityException) {
@@ -451,20 +472,40 @@ class ApkUpdateInstaller internal constructor(
     }
 
     object HttpUrlConnectionTransport : UpdateTransport {
+        private const val MAX_REDIRECTS = 5
+
         override fun open(url: String): HttpURLConnection {
-            if (!isTrustedUpdateUrl(url)) {
-                throw SecurityException("Untrusted or non-HTTPS update URL")
+            var currentUrl = url.trim()
+            for (hop in 0..MAX_REDIRECTS) {
+                if (!isTrustedUpdateUrl(currentUrl)) {
+                    throw SecurityException("Untrusted or non-HTTPS update URL")
+                }
+                val baseUrl = URL(currentUrl)
+                val urlConnection = baseUrl.openConnection()
+                val conn = (urlConnection as? HttpURLConnection
+                    ?: throw SecurityException("Unsupported URL connection type")).apply {
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.android.package-archive")
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    instanceFollowRedirects = false
+                }
+                val code = conn.responseCode
+                if (code !in 300..308 || code == 304 || code == 305 || code == 306) {
+                    return conn
+                }
+                val location = conn.getHeaderField("Location")?.trim()
+                conn.disconnect()
+                if (location.isNullOrEmpty()) {
+                    throw IOException("Redirect ($code) missing Location header")
+                }
+                val resolved = URL(baseUrl, location).toExternalForm()
+                if (!isTrustedUpdateUrl(resolved)) {
+                    throw SecurityException("Redirected to untrusted or non-HTTPS URL")
+                }
+                currentUrl = resolved
             }
-            val urlConnection = URL(url).openConnection()
-            val conn = (urlConnection as? HttpURLConnection
-                ?: throw SecurityException("Unsupported URL connection type")).apply {
-                requestMethod = "GET"
-                setRequestProperty("Accept", "application/vnd.android.package-archive")
-                connectTimeout = 15_000
-                readTimeout = 30_000
-                instanceFollowRedirects = true
-            }
-            return conn
+            throw IOException("Too many HTTP redirects while fetching update")
         }
     }
 
@@ -693,14 +734,13 @@ class ApkUpdateInstaller internal constructor(
 
         /**
          * Maximum number of download attempts before we surface a
-         * permanent `UpdateError.Io`. Three gives a flaky connection
-         * ~1+2+4 = 7 seconds of total backoff before giving up,
-         * which is enough to ride out a brief WiFi handoff without
-         * making the user wait too long.
+         * permanent `UpdateError.Io`. Three attempts allow two retries
+         * (1s + 2s = 3s total backoff) before giving up.
          */
         const val MAX_DOWNLOAD_ATTEMPTS = 3
 
         private val SAFE_TAG_REGEX = Regex("[^A-Za-z0-9._-]")
+        private const val EXPECTED_GITHUB_REPO_PREFIX = "/richiesamlie/DriveReply/"
         private val ALLOWED_UPDATE_HOSTS = setOf(
             "github.com",
             "objects.githubusercontent.com",
@@ -719,10 +759,12 @@ class ApkUpdateInstaller internal constructor(
                 val uri = URI(url.trim())
                 val scheme = uri.scheme?.lowercase()
                 val host = uri.host?.lowercase()
-                scheme == "https" && host != null && (
-                    host in ALLOWED_UPDATE_HOSTS ||
-                        host.endsWith(".githubusercontent.com")
-                    )
+                val path = uri.rawPath ?: ""
+                if (scheme != "https" || host == null) return false
+                if (uri.userInfo != null || uri.port != -1) return false
+                if (host !in ALLOWED_UPDATE_HOSTS) return false
+                if (host == "github.com" && !path.startsWith(EXPECTED_GITHUB_REPO_PREFIX)) return false
+                true
             } catch (_: Exception) {
                 false
             }

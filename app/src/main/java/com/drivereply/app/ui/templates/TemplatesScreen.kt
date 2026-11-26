@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import java.util.Locale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,7 +36,10 @@ fun TemplatesScreen(
 ) {
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val templateRules by viewModel.templateRules.collectAsStateWithLifecycle()
-    var templateToDelete by remember { mutableStateOf<MessageTemplate?>(null) }
+    var deleteTemplateId by rememberSaveable { mutableStateOf<String?>(null) }
+    val templateToDelete = remember(deleteTemplateId, templates) {
+        deleteTemplateId?.let { id -> templates.firstOrNull { it.id == id } }
+    }
     val rulesByTemplate = remember(templateRules) { templateRules.groupBy { it.templateId } }
 
     Scaffold(
@@ -104,7 +108,7 @@ fun TemplatesScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 items(templates, key = { it.id }) { template ->
@@ -176,7 +180,7 @@ fun TemplatesScreen(
                                         )
                                     }
                                     IconButton(
-                                        onClick = { templateToDelete = template }
+                                        onClick = { deleteTemplateId = template.id }
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Delete,
@@ -221,21 +225,21 @@ fun TemplatesScreen(
     // Delete Confirmation Dialog
     if (templateToDelete != null) {
         AlertDialog(
-            onDismissRequest = { templateToDelete = null },
+            onDismissRequest = { deleteTemplateId = null },
             title = { Text("Delete Template") },
-            text = { Text("Are you sure you want to delete the template \"${templateToDelete?.name}\"?") },
+            text = { Text("Are you sure you want to delete the template \"${templateToDelete.name}\"?") },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        templateToDelete?.let { viewModel.deleteTemplate(it) }
-                        templateToDelete = null
+                        viewModel.deleteTemplate(templateToDelete)
+                        deleteTemplateId = null
                     }
                 ) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { templateToDelete = null }) {
+                TextButton(onClick = { deleteTemplateId = null }) {
                     Text("Cancel")
                 }
             }
@@ -246,24 +250,38 @@ fun TemplatesScreen(
 private fun buildRuleSummary(rules: List<TemplateRule>): List<String> {
     if (rules.isEmpty()) return listOf("Any time", "All contacts")
 
-    val summaries = mutableListOf<String>()
-
-    val dayRule = rules.firstOrNull { !it.daysOfWeek.isNullOrBlank() }?.daysOfWeek
-    if (!dayRule.isNullOrBlank()) {
-        summaries.add(formatDays(dayRule))
+    if (rules.size == 1) {
+        val rule = rules.first()
+        val summaries = mutableListOf<String>()
+        if (!rule.daysOfWeek.isNullOrBlank()) {
+            summaries.add(formatDays(rule.daysOfWeek))
+        }
+        if (rule.startTime != null && rule.endTime != null) {
+            summaries.add("${formatTime(rule.startTime)}-${formatTime(rule.endTime)}")
+        }
+        val contact = rule.contactName?.trim()?.takeIf { it.isNotEmpty() }
+        summaries.add(contact ?: "All contacts")
+        return summaries
     }
 
-    val timeRule = rules.firstOrNull { it.startTime != null && it.endTime != null }
-    if (timeRule != null) {
-        summaries.add("${formatTime(timeRule.startTime!!)}-${formatTime(timeRule.endTime!!)}")
-    }
+    val summaries = mutableListOf("${rules.size} rules")
+    val distinctContacts = rules
+        .mapNotNull { it.contactName?.trim()?.takeIf { name -> name.isNotEmpty() } }
+        .distinctBy { it.lowercase(Locale.ROOT) }
+    val hasGeneralRule = rules.any { it.contactName.isNullOrBlank() }
+    val hasScheduledRule = rules.any { !it.daysOfWeek.isNullOrBlank() || (it.startTime != null && it.endTime != null) }
 
-    val contacts = rules.mapNotNull { it.contactName?.takeIf { name -> name.isNotBlank() } }.distinct()
-    summaries.add(if (contacts.isEmpty()) "All contacts" else "${contacts.size} contact(s)")
-    if (rules.size > 1) {
-        summaries.add("${rules.size} rules")
+    when {
+        distinctContacts.isNotEmpty() && hasGeneralRule ->
+            summaries.add("${distinctContacts.size} contact(s) + All")
+        distinctContacts.isNotEmpty() ->
+            summaries.add("${distinctContacts.size} contact(s)")
+        else ->
+            summaries.add("All contacts")
     }
-
+    if (hasScheduledRule) {
+        summaries.add("Scheduled")
+    }
     return summaries
 }
 
@@ -285,7 +303,7 @@ private fun formatDays(daysValue: String): String {
 }
 
 private fun formatTime(msFromMidnight: Long): String {
-    val totalMinutes = (msFromMidnight / 60_000L).toInt()
+    val totalMinutes = (msFromMidnight / 60_000L).toInt().coerceIn(0, 23 * 60 + 59)
     val hour = totalMinutes / 60
     val minute = totalMinutes % 60
     return String.format(Locale.US, "%02d:%02d", hour, minute)

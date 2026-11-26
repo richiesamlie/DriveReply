@@ -354,7 +354,10 @@ class ApkUpdateInstallerTest {
         val events = installer.downloadAndVerify("https://example.invalid/app.apk", "v2.0.48").toList()
 
         assertFalse("stale file should be deleted", stale.exists())
-        assertFalse("temp .part file should be promoted", File(updatesDir, "DriveReply-v2.0.48.apk.part").exists())
+        assertTrue(
+            "temp .part files should be promoted",
+            updatesDir.listFiles()?.none { it.name.endsWith(".part") } == true
+        )
         assertTrue(events.first() is UpdateEvent.Preparing)
         assertTrue(events.any { it is UpdateEvent.Progress && it.percent == 100 })
         assertTrue(events.any { it is UpdateEvent.Verifying })
@@ -455,7 +458,72 @@ class ApkUpdateInstallerTest {
         val mismatchEvents = mismatchInstaller.downloadAndVerify("https://example.invalid/bad.apk", "v2.0.48").toList()
         assertTrue((mismatchEvents.last() as UpdateEvent.Failed).error is UpdateError.SignatureMismatch)
         assertFalse(File(updatesDir, "DriveReply-v2.0.48.apk").exists())
-        assertFalse(File(updatesDir, "DriveReply-v2.0.48.apk.part").exists())
+        assertTrue(updatesDir.listFiles()?.none { it.name.endsWith(".part") } == true)
+    }
+
+    @Test
+    fun isTrustedUpdateUrl_enforcesStrictHostsUserInfoPortsAndRepoPath() {
+        assertTrue(
+            ApkUpdateInstaller.isTrustedUpdateUrl(
+                "https://github.com/richiesamlie/DriveReply/releases/download/v2.0.50/DriveReply-v2.0.50-release.apk"
+            )
+        )
+        assertTrue(
+            ApkUpdateInstaller.isTrustedUpdateUrl(
+                "https://release-assets.githubusercontent.com/github-production-release-asset/123"
+            )
+        )
+        assertFalse(ApkUpdateInstaller.isTrustedUpdateUrl("https://raw.githubusercontent.com/foo/bar.apk"))
+        assertFalse(ApkUpdateInstaller.isTrustedUpdateUrl("https://github.com/other/repo/releases/app.apk"))
+        assertFalse(ApkUpdateInstaller.isTrustedUpdateUrl("https://user@github.com/richiesamlie/DriveReply/app.apk"))
+        assertFalse(ApkUpdateInstaller.isTrustedUpdateUrl("https://github.com:8443/richiesamlie/DriveReply/app.apk"))
+    }
+
+    @Test
+    fun downloadAndVerify_failsImmediatelyOnRedirect302AndExhaustsRetriesOn503() = runTest {
+        val updatesDir = tempFolder.newFolder("updates-edge")
+        var redirectAttempts = 0
+        val redirectInstaller = ApkUpdateInstaller(
+            context = ContextWrapper(null),
+            transport = {
+                redirectAttempts++
+                FakeResponse.Status(302).toConnection()
+            },
+            archiveInspector = FakeArchiveInspector("com.drivereply.app", 50L, 49L),
+            signatureStore = { _, _ -> SignatureMatchResult.Matches("ok") },
+            notifier = RecordingNotifier(),
+            updatesDirOverride = updatesDir
+        )
+        val redirectEvents = redirectInstaller.downloadAndVerify("https://example.invalid/app.apk", "v2.0.50").toList()
+        assertEquals(1, redirectAttempts)
+        assertEquals(UpdateError.HttpStatus(302), (redirectEvents.last() as UpdateEvent.Failed).error)
+
+        var retryAttempts = 0
+        val retryInstaller = ApkUpdateInstaller(
+            context = ContextWrapper(null),
+            transport = {
+                retryAttempts++
+                FakeResponse.Status(503).toConnection()
+            },
+            archiveInspector = FakeArchiveInspector("com.drivereply.app", 50L, 49L),
+            signatureStore = { _, _ -> SignatureMatchResult.Matches("ok") },
+            notifier = RecordingNotifier(),
+            updatesDirOverride = updatesDir
+        )
+        val retryEvents = retryInstaller.downloadAndVerify("https://example.invalid/app.apk", "v2.0.50").toList()
+        assertEquals(ApkUpdateInstaller.MAX_DOWNLOAD_ATTEMPTS, retryAttempts)
+        assertTrue((retryEvents.last() as UpdateEvent.Failed).error is UpdateError.Io)
+
+        val alreadyCurrentInstaller = buildInstaller(
+            updatesDir = updatesDir,
+            responses = ArrayDeque(listOf(FakeResponse.Success("same".toByteArray()))),
+            inspector = FakeArchiveInspector("com.drivereply.app", 50L, 50L),
+            signatureResult = SignatureMatchResult.Matches("ok"),
+            notifier = RecordingNotifier()
+        )
+        val currentEvents = alreadyCurrentInstaller.downloadAndVerify("https://example.invalid/app.apk", "v2.0.50").toList()
+        assertEquals(UpdateError.AlreadyCurrent, (currentEvents.last() as UpdateEvent.Failed).error)
+        assertTrue(updatesDir.listFiles()?.none { it.name.endsWith(".part") } == true)
     }
 
     private fun buildInstaller(

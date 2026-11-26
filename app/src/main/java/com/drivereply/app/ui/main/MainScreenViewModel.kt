@@ -70,26 +70,27 @@ class MainScreenViewModel(application: Application) : AndroidViewModel(applicati
     val permissionState: StateFlow<PermissionSnapshot> = _permissionState.asStateFlow()
     private var lastListenerRebindAttemptMs: Long = 0
 
-    private val coreState: StateFlow<MainCoreState> = combine(
-        preferencesManager.isServiceEnabled,
-        DriveReplyService.isDriving,
-        WhatsAppNotificationListener.isListenerConnected,
-        messageTemplateDao.getActive(),
-        replyLogDao.getAll()
-    ) { enabled, driving, listenerConnected, activeTemplate, logs ->
-        val todayStart = Calendar.getInstance().apply {
+    private val todayStartMs: Long
+        get() = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
 
+    private val coreState: StateFlow<MainCoreState> = combine(
+        preferencesManager.isServiceEnabled,
+        DriveReplyService.isDriving,
+        WhatsAppNotificationListener.isListenerConnected,
+        messageTemplateDao.getActive(),
+        replyLogDao.countSince(todayStartMs)
+    ) { enabled, driving, listenerConnected, activeTemplate, todayCount ->
         MainCoreState(
             isServiceEnabled = enabled,
             isDriving = driving,
             isNotificationListenerConnected = listenerConnected,
             activeTemplate = activeTemplate,
-            repliesToday = logs.count { it.timestamp >= todayStart },
+            repliesToday = todayCount,
         )
     }.stateIn(
         viewModelScope,

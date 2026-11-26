@@ -23,4 +23,7 @@ interface ReplyLogDao {
 
     @Query("SELECT COUNT(*) FROM reply_log")
     fun getCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM reply_log WHERE timestamp >= :sinceMs")
+    fun countSince(sinceMs: Long): Flow<Int>
 }

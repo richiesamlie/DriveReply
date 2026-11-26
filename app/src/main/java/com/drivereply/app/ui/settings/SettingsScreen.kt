@@ -1,6 +1,7 @@
 package com.drivereply.app.ui.settings
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -101,6 +102,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     initialPane: SettingsPane = SettingsPane.HOME,
+    onInitialPaneConsumed: () -> Unit = {},
     viewModel: SettingsViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -119,7 +121,7 @@ fun SettingsScreen(
     val activityRecognitionEnabled by viewModel.activityRecognitionEnabled.collectAsStateWithLifecycle()
     val debugLogText by viewModel.debugLogText.collectAsStateWithLifecycle()
     val debugLogsEnabled by viewModel.debugLogsEnabled.collectAsStateWithLifecycle()
-    val isDriving by viewModel.isDriving.collectAsStateWithLifecycle()
+    val isManualSimulation by viewModel.isManualSimulationActive.collectAsStateWithLifecycle()
     val updateState by viewModel.updateCheckState.collectAsStateWithLifecycle()
 
     var pane by rememberSaveable { mutableStateOf(initialPane) }
@@ -127,14 +129,12 @@ fun SettingsScreen(
     var diagnosticsSnapshot by remember {
         mutableStateOf("Tap Copy Snapshot to generate a compact status report for support.")
     }
-    // When the user taps "Download & install" and we have to ask for
-    // POST_NOTIFICATIONS first, this flag is set so the launcher's
-    // callback can fire the actual download regardless of grant result.
     var pendingStartDownload by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(initialPane) {
         if (initialPane != SettingsPane.HOME) {
             pane = initialPane
+            onInitialPaneConsumed()
         }
     }
 
@@ -248,6 +248,13 @@ fun SettingsScreen(
                     onRequestBackgroundLocation = {
                         if (setupState.hasFineLocation) {
                             backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        } else {
+                            fineLocationLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
                         }
                     },
                     onRequestBluetooth = {
@@ -289,13 +296,17 @@ fun SettingsScreen(
                         val intent = Intent(Intent.ACTION_VIEW, "https://dontkillmyapp.com".toUri()).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        context.startActivity(intent)
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: ActivityNotFoundException) {
+                            copiedNotice = "No browser app found to open link"
+                        }
                     }
                 )
                 SettingsPane.DEBUGGING -> SettingsDebugging(
                     debugLogsEnabled = debugLogsEnabled,
                     isServiceEnabled = isServiceEnabled,
-                    isDriving = isDriving,
+                    isDriving = isManualSimulation,
                     debugLogText = debugLogText,
                     diagnosticsSnapshot = diagnosticsSnapshot,
                     onSetDebugLogs = viewModel::setDebugLogsEnabled,
@@ -341,7 +352,11 @@ fun SettingsScreen(
                         val intent = Intent(Intent.ACTION_VIEW, url.toUri()).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        context.startActivity(intent)
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: ActivityNotFoundException) {
+                            copiedNotice = "No browser app found to open link"
+                        }
                     }
                 )
             }

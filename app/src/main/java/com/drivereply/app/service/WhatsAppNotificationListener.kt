@@ -1,11 +1,13 @@
 package com.drivereply.app.service
 
 import android.app.Notification
+import android.app.Person
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import androidx.core.app.NotificationCompat
 import com.drivereply.app.DriveReplyApplication
 import com.drivereply.app.data.MessageTemplate
 import com.drivereply.app.data.PreferencesManager
@@ -13,7 +15,9 @@ import com.drivereply.app.data.ReplyLogEntry
 import com.drivereply.app.data.TemplateRule
 import com.drivereply.app.util.DebugEventLogger
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +32,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     companion object {
         private const val TAG = "DriveReplyListener"
         internal const val CLOCK_SKEW_TOLERANCE_MS = 5_000L
+        private val UNREAD_SUFFIX_REGEX = Regex("""\s*\(\d+(?:\s+new)?\s+messages?\)\s*$""", RegexOption.IGNORE_CASE)
         private val _isListenerConnected = MutableStateFlow(false)
         val isListenerConnected: StateFlow<Boolean> = _isListenerConnected.asStateFlow()
     }
@@ -42,6 +47,15 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         MESSAGE_PREDATES_DRIVING_SESSION,
         UNCHANGED_PRE_DRIVING_NOTIFICATION
     }
+
+    private data class ExtractedMessage(
+        val senderName: String?,
+        val senderKey: String?,
+        val senderUri: String?,
+        val hasSender: Boolean,
+        val text: String?,
+        val timestamp: Long
+    )
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var preferencesManager: PreferencesManager
@@ -86,10 +100,11 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         val packageName = sbn.packageName
         val isSupportedPackage = SupportedMessagingPackages.contains(packageName)
         val isWhatsAppLike = packageName.contains("whatsapp", ignoreCase = true)
+        val redactedKey = DebugEventLogger.redact(sbn.key)
         if (isWhatsAppLike || isSupportedPackage) {
             DebugEventLogger.log(
                 TAG,
-                "Posted package=$packageName supported=$isSupportedPackage key=${sbn.key} " +
+                "Posted package=$packageName supported=$isSupportedPackage key=$redactedKey " +
                     "hasActions=${(sbn.notification.actions?.size ?: 0) > 0}"
             )
         }
@@ -98,23 +113,24 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
         // Skip group summary notifications
         if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) {
-            DebugEventLogger.log(TAG, "Skip group summary package=$packageName, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip group summary package=$packageName, key=$redactedKey")
             return
         }
 
         val extras = sbn.notification.extras
         if (extras == null) {
-            DebugEventLogger.log(TAG, "Skip: notification extras missing package=$packageName, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip: notification extras missing package=$packageName, key=$redactedKey")
             return
         }
-        val contactName = extractContactName(extras) ?: sbn.key
+        val contactName = extractContactName(sbn.notification, extras) ?: sbn.key
         val dedupeKey = buildDedupeKey(sbn, extras, contactName)
+        val redactedDedupeKey = DebugEventLogger.redact(dedupeKey)
         val snapshot = extractMessageSnapshot(sbn, extras)
 
         // Only process when driving; record pre-driving baseline snapshots when idle
         if (!DriveReplyService.isDriving.value) {
             preDrivingSnapshots[dedupeKey] = snapshot
-            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=$packageName, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Skip: driving mode OFF package=$packageName, key=$redactedKey")
             return
         }
 
@@ -126,21 +142,26 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         if (skipReason != null) {
             DebugEventLogger.log(
                 TAG,
-                "Skip pre-driving notification reason=$skipReason package=$packageName key=${sbn.key}"
+                "Skip pre-driving notification reason=$skipReason package=$packageName key=$redactedKey"
             )
             return
         }
 
-        DebugEventLogger.log(TAG, "Notif received package=$packageName, key=${sbn.key}")
+        DebugEventLogger.log(TAG, "Notif received package=$packageName, key=$redactedKey")
 
         serviceScope.launch {
-            if (isSelfMessage(extras, contactName)) {
-                DebugEventLogger.log(TAG, "Skip self-message package=$packageName key=${sbn.key}")
+            if (!preferencesManager.isServiceEnabled.first()) {
+                DebugEventLogger.log(TAG, "Skip: monitoring service OFF package=$packageName key=$redactedKey")
+                return@launch
+            }
+
+            if (isSelfMessage(sbn.notification, extras, contactName)) {
+                DebugEventLogger.log(TAG, "Skip self-message package=$packageName key=$redactedKey")
                 return@launch
             }
 
             // Check group chat preference
-            val isGroupConversation = isLikelyGroupConversation(sbn.packageName, extras)
+            val isGroupConversation = isLikelyGroupConversation(sbn.packageName, sbn.notification, extras)
             val replyInGroups = preferencesManager.replyInGroupChats.first()
             if (isGroupConversation && !replyInGroups) {
                 DebugEventLogger.log(TAG, "Skip group conversation package=$packageName")
@@ -149,7 +170,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
             // Check if already replied to this conversation in this driving session or cooldown window
             if (DriveReplyService.hasRepliedToConversation(dedupeKey)) {
-                DebugEventLogger.log(TAG, "Skip duplicate conversation key=$dedupeKey")
+                DebugEventLogger.log(TAG, "Skip duplicate conversation key=$redactedDedupeKey")
                 return@launch
             }
 
@@ -198,47 +219,65 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             // Find the reply action with RemoteInput
             val replyAction = findReplyAction(sbn.notification)
             if (replyAction == null) {
-                DebugEventLogger.log(TAG, "Skip: no reply action package=$packageName, key=${sbn.key}")
+                DebugEventLogger.log(TAG, "Skip: no reply action package=$packageName, key=$redactedKey")
                 return@launch
             }
 
-            // Send the reply
-            try {
-                val remoteInputs = replyAction.remoteInputs
-                if (remoteInputs == null) {
-                    DebugEventLogger.log(TAG, "Skip: reply action remote inputs missing package=$packageName, key=${sbn.key}")
-                    return@launch
-                }
-                if (remoteInputs.isEmpty()) {
-                    DebugEventLogger.log(TAG, "Skip: reply action has empty remote inputs package=$packageName, key=${sbn.key}")
-                    return@launch
-                }
+            val remoteInputs = replyAction.remoteInputs
+            if (remoteInputs == null) {
+                DebugEventLogger.log(TAG, "Skip: reply action remote inputs missing package=$packageName, key=$redactedKey")
+                return@launch
+            }
+            if (remoteInputs.isEmpty()) {
+                DebugEventLogger.log(TAG, "Skip: reply action has empty remote inputs package=$packageName, key=$redactedKey")
+                return@launch
+            }
 
-                if (!DriveReplyService.markConversationReplied(dedupeKey)) {
-                    DebugEventLogger.log(TAG, "Skip duplicate conversation key=$dedupeKey (race)")
-                    return@launch
-                }
+            if (!DriveReplyService.isDriving.value) {
+                DebugEventLogger.log(TAG, "Skip: driving ended before send package=$packageName, key=$redactedKey")
+                return@launch
+            }
 
-                val fillInIntent = android.content.Intent().apply {
-                    val replyBundle = Bundle().apply {
-                        remoteInputs.forEach { remoteInput ->
-                            putCharSequence(remoteInput.resultKey, template.body)
-                        }
+            if (!DriveReplyService.markConversationReplied(dedupeKey)) {
+                DebugEventLogger.log(TAG, "Skip duplicate conversation key=$redactedDedupeKey (race)")
+                return@launch
+            }
+
+            val fillInIntent = android.content.Intent().apply {
+                val replyBundle = Bundle().apply {
+                    remoteInputs.forEach { remoteInput ->
+                        putCharSequence(remoteInput.resultKey, template.body)
                     }
-                    android.app.RemoteInput.addResultsToIntent(replyAction.remoteInputs, this, replyBundle)
-                    android.app.RemoteInput.setResultsSource(
-                        this,
-                        android.app.RemoteInput.SOURCE_FREE_FORM_INPUT
-                    )
                 }
+                android.app.RemoteInput.addResultsToIntent(replyAction.remoteInputs, this, replyBundle)
+                android.app.RemoteInput.setResultsSource(
+                    this,
+                    android.app.RemoteInput.SOURCE_FREE_FORM_INPUT
+                )
+            }
 
+            // Send the reply; only roll back dedupe if PendingIntent.send() itself fails.
+            try {
                 replyAction.actionIntent.send(this@WhatsAppNotificationListener, 0, fillInIntent)
                 DebugEventLogger.log(
                     TAG,
                     "Auto-reply sent package=$packageName template=${template.name}"
                 )
+            } catch (e: CancellationException) {
+                DriveReplyService.unmarkConversationReplied(dedupeKey)
+                throw e
+            } catch (e: Exception) {
+                DriveReplyService.unmarkConversationReplied(dedupeKey)
+                DebugEventLogger.log(
+                    TAG,
+                    "Send failed package=$packageName, key=$redactedKey",
+                    e
+                )
+                return@launch
+            }
 
-                // Log the reply and enforce retention policy
+            // Log the reply and enforce retention policy independently from send deduplication.
+            try {
                 val replyLogDao = app.database.replyLogDao()
                 replyLogDao.insert(
                     ReplyLogEntry(
@@ -253,12 +292,12 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                     val threshold = System.currentTimeMillis() - (retentionDays.toLong() * 24 * 60 * 60 * 1000L)
                     replyLogDao.deleteOlderThan(threshold)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // Failed to send reply — PendingIntent may have been revoked
-                DriveReplyService.unmarkConversationReplied(dedupeKey)
                 DebugEventLogger.log(
                     TAG,
-                    "Send failed package=$packageName, key=${sbn.key}",
+                    "Reply log persistence failed package=$packageName, key=$redactedKey",
                     e
                 )
             }
@@ -268,14 +307,14 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
         if (packageName.contains("whatsapp", ignoreCase = true)) {
-            DebugEventLogger.log(TAG, "Notification removed package=$packageName, key=${sbn.key}")
+            DebugEventLogger.log(TAG, "Notification removed package=$packageName, key=${DebugEventLogger.redact(sbn.key)}")
         }
         if (!DriveReplyService.isDriving.value &&
             SupportedMessagingPackages.contains(packageName) &&
             (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0)
         ) {
             val extras = sbn.notification.extras ?: return
-            val contactName = extractContactName(extras) ?: sbn.key
+            val contactName = extractContactName(sbn.notification, extras) ?: sbn.key
             preDrivingSnapshots.remove(buildDedupeKey(sbn, extras, contactName))
         }
     }
@@ -283,9 +322,13 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     override fun onListenerDisconnected() {
         _isListenerConnected.value = false
         DebugEventLogger.log(TAG, "Notification listener disconnected, requesting rebind")
-        requestRebind(
-            android.content.ComponentName(this, WhatsAppNotificationListener::class.java)
-        )
+        try {
+            requestRebind(
+                android.content.ComponentName(this, WhatsAppNotificationListener::class.java)
+            )
+        } catch (e: Exception) {
+            DebugEventLogger.log(TAG, "Failed to request listener rebind", e)
+        }
     }
 
     override fun onDestroy() {
@@ -327,23 +370,45 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         }
         val normalizedConvTitle = conversationTitle?.trim()?.takeIf { it.isNotEmpty() }
         if (normalizedConvTitle != null) {
-            return "$packageName|conv:${normalizedConvTitle.lowercase()}"
+            return "$packageName|conv:${normalizedConvTitle.lowercase(Locale.ROOT)}"
         }
         val normalizedContact = contactName.trim()
         return if (normalizedContact.isNotEmpty()) {
-            "$packageName|contact:${normalizedContact.lowercase()}"
+            "$packageName|contact:${normalizedContact.lowercase(Locale.ROOT)}"
         } else {
             "$packageName|id:$notificationId"
         }
     }
 
-    internal fun isSelfMessage(extras: Bundle, contactName: String): Boolean {
+    internal fun isSelfMessage(
+        notification: Notification?,
+        extras: Bundle,
+        contactName: String
+    ): Boolean {
+        val messagingStyle = notification?.let {
+            try {
+                NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it)
+            } catch (_: Exception) {
+                null
+            }
+        }
         @Suppress("DEPRECATION")
-        val selfDisplayName = extras
-            .getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)
-            ?.toString()
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        val selfPerson: Person? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            extras.getParcelable(Notification.EXTRA_MESSAGING_PERSON, Person::class.java)
+        } else {
+            extras.getParcelable(Notification.EXTRA_MESSAGING_PERSON)
+        }
+        @Suppress("DEPRECATION")
+        val selfDisplayName = messagingStyle?.user?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: selfPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: extras.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME)
+                ?.toString()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        val selfKey = messagingStyle?.user?.key?.trim()?.takeIf { it.isNotEmpty() }
+            ?: selfPerson?.key?.trim()?.takeIf { it.isNotEmpty() }
+        val selfUri = messagingStyle?.user?.uri?.trim()?.takeIf { it.isNotEmpty() }
+            ?: selfPerson?.uri?.trim()?.takeIf { it.isNotEmpty() }
 
         if (!selfDisplayName.isNullOrEmpty() &&
             contactName.equals(selfDisplayName, ignoreCase = true)
@@ -351,14 +416,13 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return true
         }
 
-        val messages = extractMessagingStyleMessages(extras)
+        val messages = extractMessagingMessages(notification, extras)
         if (messages.isNotEmpty()) {
-            val latestMessage = messages.last()
-            val latestSenderPerson = latestMessage.senderPerson
-            if (latestSenderPerson == null) {
-                return true
-            }
-            val latestSenderName = latestSenderPerson.name?.toString()?.trim()
+            val latest = messages.last()
+            if (!latest.hasSender) return true
+            if (!selfKey.isNullOrEmpty() && latest.senderKey == selfKey) return true
+            if (!selfUri.isNullOrEmpty() && latest.senderUri == selfUri) return true
+            val latestSenderName = latest.senderName?.trim()
             if (!selfDisplayName.isNullOrEmpty() &&
                 !latestSenderName.isNullOrEmpty() &&
                 latestSenderName.equals(selfDisplayName, ignoreCase = true)
@@ -370,7 +434,30 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         return false
     }
 
-    private fun extractMessagingStyleMessages(extras: Bundle): List<Notification.MessagingStyle.Message> {
+    private fun extractMessagingMessages(
+        notification: Notification?,
+        extras: Bundle
+    ): List<ExtractedMessage> {
+        val compatStyle = notification?.let {
+            try {
+                NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it)
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (compatStyle != null && compatStyle.messages.isNotEmpty()) {
+            return compatStyle.messages.map { msg ->
+                val person = msg.person
+                ExtractedMessage(
+                    senderName = person?.name?.toString()?.trim(),
+                    senderKey = person?.key?.trim()?.takeIf { it.isNotEmpty() },
+                    senderUri = person?.uri?.trim()?.takeIf { it.isNotEmpty() },
+                    hasSender = person != null,
+                    text = msg.text?.toString(),
+                    timestamp = msg.timestamp
+                )
+            }
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
         @Suppress("DEPRECATION")
         val parcelables: Array<Parcelable>? =
@@ -379,7 +466,17 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             } else {
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES)
             }
-        return Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables)
+        return Notification.MessagingStyle.Message.getMessagesFromBundleArray(parcelables).map { msg ->
+            val person = msg.senderPerson
+            ExtractedMessage(
+                senderName = person?.name?.toString()?.trim(),
+                senderKey = person?.key?.trim()?.takeIf { it.isNotEmpty() },
+                senderUri = person?.uri?.trim()?.takeIf { it.isNotEmpty() },
+                hasSender = person != null,
+                text = msg.text?.toString(),
+                timestamp = msg.timestamp
+            )
+        }
     }
 
     internal fun computeContentSignature(raw: String): String {
@@ -391,14 +488,14 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         sbn: StatusBarNotification,
         extras: Bundle
     ): NotificationMessageSnapshot {
-        val messages = extractMessagingStyleMessages(extras)
+        val messages = extractMessagingMessages(sbn.notification, extras)
         val notificationWhen = sbn.notification.`when`.takeIf { it > 0L }
         if (messages.isNotEmpty()) {
             val latestMessage = messages.last()
             val messageTimestampMs = messages.maxOfOrNull { it.timestamp }?.takeIf { it > 0L }
                 ?: notificationWhen
             val rawSig =
-                "msg|${messages.size}|${latestMessage.timestamp}|${latestMessage.senderPerson?.name ?: ""}|${latestMessage.text ?: ""}"
+                "msg|${messages.size}|${latestMessage.timestamp}|${latestMessage.senderName ?: ""}|${latestMessage.text ?: ""}"
             return NotificationMessageSnapshot(
                 messageTimestampMs = messageTimestampMs,
                 contentSignature = computeContentSignature(rawSig),
@@ -409,7 +506,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
-        val contentSignature = if (text.isNotEmpty() || bigText.isNotEmpty()) {
+        val contentSignature = if (title.isNotEmpty() || text.isNotEmpty() || bigText.isNotEmpty()) {
             computeContentSignature("txt|$title|$text|$bigText")
         } else {
             null
@@ -469,7 +566,7 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             if (!SupportedMessagingPackages.contains(sbn.packageName)) continue
             if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) continue
             val extras = sbn.notification.extras ?: continue
-            val contactName = extractContactName(extras) ?: sbn.key
+            val contactName = extractContactName(sbn.notification, extras) ?: sbn.key
             val dedupeKey = buildDedupeKey(sbn, extras, contactName)
             val snapshot = extractMessageSnapshot(sbn, extras)
             if (onlyBeforeMs != null) {
@@ -501,14 +598,28 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         if (action.allowGeneratedReplies) {
             score += 5
         }
-        val title = action.title?.toString()?.trim()?.lowercase()
+        val title = action.title?.toString()?.trim()?.lowercase(Locale.ROOT)
         if (title != null && (title.contains("reply") || title.contains("balas"))) {
             score += 10
         }
         return score
     }
 
-    internal fun extractContactName(extras: Bundle): String? {
+    internal fun extractContactName(
+        notification: Notification?,
+        extras: Bundle
+    ): String? {
+        val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
+            ?.toString()
+            ?.trim()
+            ?.let(::stripUnreadCountSuffix)
+            ?.takeIf { it.isNotEmpty() }
+        val isGroup = conversationTitle != null &&
+            isLikelyGroupConversation("", notification, extras)
+        if (isGroup) {
+            return conversationTitle
+        }
+
         val directCandidates = listOf(
             extras.getCharSequence(Notification.EXTRA_TITLE),
             extras.getCharSequence(Notification.EXTRA_TITLE_BIG),
@@ -521,39 +632,41 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             return directCandidates.first()
         }
 
-        val messages = extractMessagingStyleMessages(extras)
+        val messages = extractMessagingMessages(notification, extras)
         val sender = messages.asReversed().mapNotNull { message ->
-            // senderPerson is the modern (API 28+) source; the
-            // deprecated CharSequence `sender` is intentionally not
-            // used as a fallback anymore.
-            message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            message.senderName?.takeIf { it.isNotEmpty() }
         }.firstOrNull()
         if (!sender.isNullOrEmpty()) return sender
 
         return null
     }
 
-    internal fun isLikelyGroupConversation(packageName: String, extras: Bundle): Boolean {
+    private fun stripUnreadCountSuffix(value: String): String {
+        return value.replace(UNREAD_SUFFIX_REGEX, "").trim()
+    }
+
+    internal fun isLikelyGroupConversation(
+        packageName: String,
+        notification: Notification?,
+        extras: Bundle
+    ): Boolean {
         val platformGroupFlag = extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION, false)
         val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
             ?.toString()
             ?.trim()
+            ?.let(::stripUnreadCountSuffix)
             ?.takeIf { it.isNotEmpty() }
 
-        val messages = extractMessagingStyleMessages(extras)
+        val messages = extractMessagingMessages(notification, extras)
         if (messages.isNotEmpty()) {
             val latestMessageSender = messages.asReversed().mapNotNull { message ->
-                message.senderPerson?.name?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                message.senderName?.takeIf { it.isNotEmpty() }
             }.firstOrNull()
-            // Strong signal: conversation title and sender differ (common
-            // group-chat structure).
             val titleSenderMismatch = !conversationTitle.isNullOrEmpty() &&
                 !latestMessageSender.isNullOrEmpty() &&
                 !conversationTitle.equals(latestMessageSender, ignoreCase = true)
-            // WhatsApp can set EXTRA_IS_GROUP_CONVERSATION aggressively;
-            // require corroboration.
             if (packageName.startsWith("com.whatsapp")) {
-                return titleSenderMismatch
+                return titleSenderMismatch || (platformGroupFlag && latestMessageSender == null)
             }
             if (titleSenderMismatch) return true
         }

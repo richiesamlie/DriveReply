@@ -82,6 +82,16 @@ class PreferencesManager(private val context: Context) {
         }
     }
 
+    suspend fun toggleBluetoothDevice(address: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[KEY_BLUETOOTH_DEVICES]?.toMutableSet() ?: mutableSetOf()
+            if (!current.add(address)) {
+                current.remove(address)
+            }
+            prefs[KEY_BLUETOOTH_DEVICES] = current
+        }
+    }
+
     suspend fun setSpeedActivationThreshold(threshold: Int) {
         context.dataStore.edit { prefs ->
             prefs[KEY_SPEED_ACTIVATION_THRESHOLD] = threshold

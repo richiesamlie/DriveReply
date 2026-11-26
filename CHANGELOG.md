@@ -5,6 +5,18 @@ All notable changes to DriveReply will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.51] — 2026-11-26
+
+### Fixed
+- Upgraded Room schema to v5 (`MIGRATION_4_5`) adding `ON DELETE CASCADE` foreign keys and indexes on `template_rules`, fixed overnight rule matching wraparound and specificity sorting, promoted the next template when deleting the active one, and made Bluetooth device toggling atomic.
+- Hardened `DriveReplyService`, `WhatsAppNotificationListener`, `BluetoothReceiver`, `BootReceiver`, and `ActivityTransitionReceiver` for foreground-service location permission fallbacks, indoor speed signal-loss exits, multi-device Bluetooth state, unified API 29+ `MessagingStyle` extraction, self-message detection, and isolated post-send reply logging.
+- Fixed Compose Navigation 3 state/ViewModel preservation, `MainShell` window insets, template rule validation and `rememberSaveable` dialogs, onboarding manual-mode toggle and completion navigation, Analytics chart alignment, Settings diagnostics threading, and launcher icon stroke/mask rendering.
+
+### Security & Reliability
+- Hardened `GitHubReleaseChecker` and `ApkUpdateInstaller` with strict GitHub HTTPS host/path allowlists, manual redirect hop validation, bounded reads, unique `.apk.part` staging, `canRequestPackageInstalls()` checks, and safe cancellation.
+- Added per-process salting to `DebugEventLogger.redact()`, stripped `Log.i`/`Log.w` in ProGuard release rules, and properly excluded Room DB, SharedPreferences, and DataStore files from Android backup/device transfer.
+- Hardened GitHub Actions CI/release workflows with `compileDebugAndroidTestKotlin`, release signing config/signature verification (`apksigner`), concurrency guards, and prerelease tagging.
+
 ## [2.0.50] — 2026-11-26
 
 ### Fixed

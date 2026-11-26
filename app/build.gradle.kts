@@ -1,4 +1,3 @@
-import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -17,7 +16,7 @@ if (keystorePropertiesFile.exists()) {
 val releaseVersionCode: Int = System.getenv("RELEASE_VERSION_CODE")
     ?.toIntOrNull()
     ?.coerceAtLeast(1)
-    ?: 50
+    ?: 51
 
 // DriveReply 2.0 ships under a new applicationId: `com.drivereply.app`.
 // (The pre-2.0 package `com.example.drivereply` was a Play-blocking
@@ -50,16 +49,25 @@ android {
     signingConfigs {
         create("release") {
             val envStoreFile = System.getenv("RELEASE_KEYSTORE_PATH")
-            if (keystorePropertiesFile.exists()) {
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+            val envStorePassword = System.getenv("RELEASE_STORE_PASSWORD")
+            val envKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
+            val envKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            val propStorePath = keystoreProperties.getProperty("storeFile")
+            if (keystorePropertiesFile.exists() && !propStorePath.isNullOrBlank()) {
+                storeFile = rootProject.file(propStorePath)
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
-            } else if (!envStoreFile.isNullOrEmpty()) {
+            } else if (!envStoreFile.isNullOrBlank() &&
+                file(envStoreFile).isFile &&
+                !envStorePassword.isNullOrEmpty() &&
+                !envKeyAlias.isNullOrBlank() &&
+                !envKeyPassword.isNullOrEmpty()
+            ) {
                 storeFile = file(envStoreFile)
-                storePassword = System.getenv("RELEASE_STORE_PASSWORD")
-                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
-                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+                storePassword = envStorePassword
+                keyAlias = envKeyAlias
+                keyPassword = envKeyPassword
             }
         }
     }
@@ -69,7 +77,14 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             val envStoreFile = System.getenv("RELEASE_KEYSTORE_PATH")
-            if (keystorePropertiesFile.exists() || !envStoreFile.isNullOrEmpty()) {
+            val propStorePath = keystoreProperties.getProperty("storeFile")
+            val hasPropSigning = keystorePropertiesFile.exists() && !propStorePath.isNullOrBlank()
+            val hasEnvSigning = !envStoreFile.isNullOrBlank() &&
+                file(envStoreFile).isFile &&
+                !System.getenv("RELEASE_STORE_PASSWORD").isNullOrEmpty() &&
+                !System.getenv("RELEASE_KEY_ALIAS").isNullOrBlank() &&
+                !System.getenv("RELEASE_KEY_PASSWORD").isNullOrEmpty()
+            if (hasPropSigning || hasEnvSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
